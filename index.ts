@@ -19,6 +19,7 @@ import { initializeDatabase } from "./schema";
 import authRoutes from "./src/routes/authRoutes";
 import userRoutes from "./src/routes/userRoutes";
 import roleRoutes from "./src/routes/roleRoutes";
+import courseRoutes from "./src/routes/courseRoutes";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -36,6 +37,7 @@ app.set('trust proxy', 1);
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/roles', roleRoutes);
+app.use('/api/courses', courseRoutes);
 
 
 // Health check endpoint
