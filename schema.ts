@@ -110,6 +110,116 @@ export async function initializeDatabase(): Promise<void> {
             );
         `);
 
+        // Course Categories
+        await connection.query(`
+            CREATE TABLE if not exists course_categories (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(100) NOT NULL UNIQUE,
+                description TEXT,
+                status SMALLINT DEFAULT 1,
+                created_by BIGINT,
+                updated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                FOREIGN KEY (updated_by) REFERENCES users(id)
+            );
+        `);
+
+        // Courses
+        await connection.query(`
+            CREATE TABLE if not exists courses (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                description TEXT,
+                course_image VARCHAR(500),
+                duration VARCHAR(100),
+                levels JSON,
+                category_id BIGINT,
+                status SMALLINT DEFAULT 1,
+                created_by BIGINT,
+                updated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (category_id) REFERENCES course_categories(id),
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                FOREIGN KEY (updated_by) REFERENCES users(id)
+            );
+        `);
+
+        // Course Sections (Subjects)
+        await connection.query(`
+            CREATE TABLE if not exists course_sections (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                course_id BIGINT NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                description TEXT,
+                sort_order INT DEFAULT 0,
+                is_free BOOLEAN DEFAULT FALSE,
+                status SMALLINT DEFAULT 1,
+                created_by BIGINT,
+                updated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                FOREIGN KEY (updated_by) REFERENCES users(id)
+            );
+        `);
+
+        // Course Contents
+        await connection.query(`
+            CREATE TABLE if not exists course_contents (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                course_id BIGINT NOT NULL,
+                section_id BIGINT NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                description TEXT,
+                content_type ENUM(
+                    'TEXT',
+                    'DOCUMENT',
+                    'IMAGE', 
+                    'VIDEO',
+                    'AUDIO'
+                ) NOT NULL,
+                content_url VARCHAR(1000),
+                content_text LONGTEXT,
+                file_name VARCHAR(255),
+                file_size BIGINT DEFAULT 0,
+                mime_type VARCHAR(100),
+                duration INT DEFAULT 0,
+                sort_order INT DEFAULT 0,
+                is_free BOOLEAN DEFAULT FALSE,
+                status SMALLINT DEFAULT 1,
+                created_by BIGINT,
+                updated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+                FOREIGN KEY (section_id) REFERENCES course_sections(id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                FOREIGN KEY (updated_by) REFERENCES users(id)
+            );
+        `);
+
+
+
+        // Course Ratings & Reviews
+        await connection.query(`
+            CREATE TABLE if not exists course_ratings (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                course_id BIGINT NOT NULL,
+                student_id BIGINT NOT NULL,
+                rating TINYINT CHECK (rating >= 1 AND rating <= 5),
+                review TEXT,
+                is_approved BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_rating (course_id, student_id),
+                FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+                FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+        `);
 
         // Insert static roles if they don't exist
         const roles = [
