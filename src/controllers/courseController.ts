@@ -872,6 +872,141 @@ export class CourseController {
   }
 
   /**
+   * Get course sections
+   * GET /api/courses/:courseId/sections
+   */
+  static async getCourseSections(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const courseId = parseInt(req.params.courseId as string);
+
+      if (isNaN(courseId)) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Invalid course ID'
+        });
+        return;
+      }
+
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        
+        // Verify course exists
+        const course = await DatabaseHelpers.executeSelectOne(
+          connection,
+          CourseQueries.getCourseById,
+          [courseId]
+        );
+
+        if (!course) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Course not found'
+          });
+          return;
+        }
+
+        // Get course sections
+        const sections = await DatabaseHelpers.executeSelect(
+          connection,
+          CourseSectionQueries.getSectionsByCourse,
+          [courseId]
+        );
+
+        res.status(200).json({
+          status: 'success',
+          message: 'Course sections retrieved successfully',
+          data: {
+            course_id: courseId,
+            course_title: course.title,
+            sections
+          }
+        });
+      });
+
+    } catch (error) {
+      console.error('Error getting course sections:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  /**
+   * Get section contents
+   * GET /api/courses/:courseId/sections/:sectionId/contents
+   */
+  static async getSectionContents(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const courseId = parseInt(req.params.courseId as string);
+      const sectionId = parseInt(req.params.sectionId as string);
+
+      if (isNaN(courseId) || isNaN(sectionId)) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Invalid course ID or section ID'
+        });
+        return;
+      }
+
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        
+        // Verify section exists and belongs to the course
+        const section = await DatabaseHelpers.executeSelectOne(
+          connection,
+          `SELECT cs.*, c.title as course_title 
+           FROM course_sections cs
+           JOIN courses c ON cs.course_id = c.id
+           WHERE cs.id = ? AND cs.course_id = ? AND cs.status = 1`,
+          [sectionId, courseId]
+        );
+
+        if (!section) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Section not found'
+          });
+          return;
+        }
+
+        // Get section contents
+        const contents = await DatabaseHelpers.executeSelect(
+          connection,
+          CourseContentQueries.getContentsBySection,
+          [sectionId]
+        );
+
+        // Generate signed URLs for all content
+        for (const content of contents) {
+          await processContentSignedUrls(content);
+        }
+
+        res.status(200).json({
+          status: 'success',
+          message: 'Section contents retrieved successfully',
+          data: {
+            section: {
+              id: section.id,
+              title: section.title,
+              description: section.description,
+              sort_order: section.sort_order,
+              course_id: courseId,
+              course_title: section.course_title
+            },
+            contents
+          }
+        });
+      });
+
+    } catch (error) {
+      console.error('Error getting section contents:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  /**
    * Create course content (Admin only)
    * POST /api/courses/:courseId/sections/:sectionId/contents
    */
@@ -1144,6 +1279,7 @@ export class CourseController {
               S3Service.getFileTypeCategory(file.mimetype), // Use detected content type
               uploadResult.key || null, // Store S3 key instead of full URL
               null, // content_text
+              null, // youtube_url (not applicable for file uploads)
               FileUploadValidator.sanitizeFileName(file.originalname) || null, // sanitized file_name
               file.size || null, // file_size
               file.mimetype || null, // mime_type
