@@ -1605,4 +1605,260 @@ export class CourseController {
     }
   }
 
+  /**
+   * Update course section (Admin only)
+   * PUT /api/courses/:courseId/sections/:sectionId
+   */
+  static async updateSection(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const courseId = parseInt(req.params.courseId as string);
+      const sectionId = parseInt(req.params.sectionId as string);
+      const { title, description, sort_order, is_free } = req.body;
+
+      if (isNaN(courseId) || isNaN(sectionId)) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Invalid course ID or section ID'
+        });
+        return;
+      }
+
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        
+        // Verify section exists and belongs to course
+        const existingSection = await DatabaseHelpers.executeSelectOne(
+          connection,
+          `SELECT * FROM course_sections WHERE id = ? AND course_id = ? AND status = 1`,
+          [sectionId, courseId]
+        );
+
+        if (!existingSection) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Section not found'
+          });
+          return;
+        }
+
+        // Update section
+        await DatabaseHelpers.executeQuery(
+          connection,
+          `UPDATE course_sections 
+           SET title = ?, description = ?, sort_order = ?, is_free = ?, 
+               updated_by = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND course_id = ?`,
+          [
+            title || existingSection.title,
+            description || existingSection.description,
+            sort_order || existingSection.sort_order,
+            is_free !== undefined ? is_free : existingSection.is_free,
+            req.user?.id,
+            sectionId,
+            courseId
+          ]
+        );
+
+        // Get updated section
+        const updatedSection = await DatabaseHelpers.executeSelectOne(
+          connection,
+          `SELECT * FROM course_sections WHERE id = ? AND course_id = ?`,
+          [sectionId, courseId]
+        );
+
+        res.status(200).json({
+          status: 'success',
+          message: 'Section updated successfully',
+          data: {
+            section: updatedSection
+          }
+        });
+      });
+
+    } catch (error) {
+      console.error('Error updating section:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  /**
+   * Delete course section (Admin only)
+   * DELETE /api/courses/:courseId/sections/:sectionId
+   */
+  static async deleteSection(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const courseId = parseInt(req.params.courseId as string);
+      const sectionId = parseInt(req.params.sectionId as string);
+
+      if (isNaN(courseId) || isNaN(sectionId)) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Invalid course ID or section ID'
+        });
+        return;
+      }
+
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        
+        // Verify section exists and belongs to course
+        const section = await DatabaseHelpers.executeSelectOne(
+          connection,
+          `SELECT * FROM course_sections WHERE id = ? AND course_id = ? AND status = 1`,
+          [sectionId, courseId]
+        );
+
+        if (!section) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Section not found'
+          });
+          return;
+        }
+
+        // Check if section has contents
+        const contentCount = await DatabaseHelpers.executeSelectOne(
+          connection,
+          `SELECT COUNT(*) as count FROM course_contents WHERE section_id = ? AND status = 1`,
+          [sectionId]
+        );
+
+        if (contentCount.count > 0) {
+          res.status(400).json({
+            status: 'error',
+            message: 'Cannot delete section that contains content. Please delete all content first.',
+            details: `Section contains ${contentCount.count} content items`
+          });
+          return;
+        }
+
+        // Soft delete section
+        await DatabaseHelpers.executeQuery(
+          connection,
+          `UPDATE course_sections SET status = 0, updated_by = ? WHERE id = ? AND course_id = ?`,
+          [req.user?.id, sectionId, courseId]
+        );
+
+        res.status(200).json({
+          status: 'success',
+          message: 'Section deleted successfully',
+          data: {
+            deleted_section: {
+              id: section.id,
+              title: section.title,
+              course_id: courseId
+            }
+          }
+        });
+      });
+
+    } catch (error) {
+      console.error('Error deleting section:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  /**
+   * Update course content (Admin only)
+   * PUT /api/courses/:courseId/sections/:sectionId/contents/:contentId
+   */
+  static async updateContent(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const courseId = parseInt(req.params.courseId as string);
+      const sectionId = parseInt(req.params.sectionId as string);
+      const contentId = parseInt(req.params.contentId as string);
+      
+      const { 
+        title, 
+        description, 
+        content_type, 
+        content_url, 
+        content_text,
+        sort_order, 
+        is_free, 
+        duration 
+      } = req.body;
+
+      if (isNaN(courseId) || isNaN(sectionId) || isNaN(contentId)) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Invalid course ID, section ID, or content ID'
+        });
+        return;
+      }
+
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        
+        // Verify content exists and belongs to section/course
+        const existingContent = await DatabaseHelpers.executeSelectOne(
+          connection,
+          `SELECT * FROM course_contents 
+           WHERE id = ? AND section_id = ? AND course_id = ? AND status = 1`,
+          [contentId, sectionId, courseId]
+        );
+
+        if (!existingContent) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Content not found'
+          });
+          return;
+        }
+
+        // Update content
+        await DatabaseHelpers.executeQuery(
+          connection,
+          `UPDATE course_contents 
+           SET title = ?, description = ?, content_type = ?, content_url = ?, 
+               content_text = ?, sort_order = ?, is_free = ?, duration = ?,
+               updated_by = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND section_id = ? AND course_id = ?`,
+          [
+            title || existingContent.title,
+            description || existingContent.description,
+            content_type || existingContent.content_type,
+            content_url || existingContent.content_url,
+            content_text || existingContent.content_text,
+            sort_order || existingContent.sort_order,
+            is_free !== undefined ? is_free : existingContent.is_free,
+            duration || existingContent.duration,
+            req.user?.id,
+            contentId,
+            sectionId,
+            courseId
+          ]
+        );
+
+        // Get updated content
+        const updatedContent = await DatabaseHelpers.executeSelectOne(
+          connection,
+          CourseContentQueries.getContentById,
+          [contentId]
+        );
+
+        // Generate signed URLs for the updated content
+        await processContentSignedUrls(updatedContent);
+
+        res.status(200).json({
+          status: 'success',
+          message: 'Content updated successfully',
+          data: {
+            content: updatedContent
+          }
+        });
+      });
+
+    } catch (error) {
+      console.error('Error updating content:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
+  }
+
 }

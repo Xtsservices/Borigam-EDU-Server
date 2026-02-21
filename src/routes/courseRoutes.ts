@@ -84,6 +84,12 @@ router.get('/:courseId/sections', CourseController.getCourseSections);
 // Create section for a course (Admin only)
 router.post('/:courseId/sections', adminOnly, CourseController.createSection);
 
+// Update section (Admin only)
+router.put('/:courseId/sections/:sectionId', adminOnly, CourseController.updateSection);
+
+// Delete section (Admin only)
+router.delete('/:courseId/sections/:sectionId', adminOnly, CourseController.deleteSection);
+
 /**
  * Course Content Routes
  */
@@ -93,6 +99,9 @@ router.get('/:courseId/sections/:sectionId/contents', CourseController.getSectio
 
 // Create content for a section (Admin only)
 router.post('/:courseId/sections/:sectionId/contents', adminOnly, CourseController.createContent);
+
+// Update content (Admin only)
+router.put('/:courseId/sections/:sectionId/contents/:contentId', adminOnly, CourseController.updateContent);
 
 /**
  * File Upload Routes (Admin only)
