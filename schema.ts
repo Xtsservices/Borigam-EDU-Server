@@ -40,6 +40,8 @@ export async function initializeDatabase(): Promise<void> {
                 updated_by BIGINT,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                temp_created_at DATETIME,
+                temp_updated_at DATETIME,
                 CONSTRAINT fk_users_created_by FOREIGN KEY (created_by) REFERENCES users(id),
                 CONSTRAINT fk_users_updated_by FOREIGN KEY (updated_by) REFERENCES users(id)
             );
@@ -72,6 +74,8 @@ export async function initializeDatabase(): Promise<void> {
                 updated_by BIGINT,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                temp_created_at DATETIME,
+                temp_updated_at DATETIME,
                 UNIQUE(user_id, role_id),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
@@ -172,37 +176,46 @@ export async function initializeDatabase(): Promise<void> {
             CREATE TABLE if not exists course_contents (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
                 course_id BIGINT NOT NULL,
-                section_id BIGINT NOT NULL,
-                title VARCHAR(255) NOT NULL,
+                section_id BIGINT,
+                title VARCHAR(200) NOT NULL,
                 description TEXT,
                 content_type ENUM(
                     'TEXT',
-                    'DOCUMENT',
+                    'YOUTUBE',
+                    'PDF',
+                    'DOC',
+                    'DOCX',
                     'IMAGE', 
                     'VIDEO',
-                    'AUDIO'
+                    'AUDIO',
+                    'QUIZ',
+                    'ASSIGNMENT'
                 ) NOT NULL,
                 content_url VARCHAR(1000),
-                content_text LONGTEXT,
-                file_name VARCHAR(255),
+                file_path VARCHAR(500),
                 file_size BIGINT DEFAULT 0,
                 mime_type VARCHAR(100),
-                duration INT DEFAULT 0,
+                content_text LONGTEXT,
+                file_name VARCHAR(255),
+                youtube_url VARCHAR(500),
                 sort_order INT DEFAULT 0,
+                duration INT DEFAULT 0,
                 is_free BOOLEAN DEFAULT FALSE,
                 status SMALLINT DEFAULT 1,
                 created_by BIGINT,
                 updated_by BIGINT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_content_course (course_id),
+                INDEX idx_section_id (section_id),
+                INDEX idx_content_type (content_type),
+                INDEX idx_content_order (sort_order),
                 FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
-                FOREIGN KEY (section_id) REFERENCES course_sections(id) ON DELETE CASCADE,
+                FOREIGN KEY (section_id) REFERENCES course_sections(id),
                 FOREIGN KEY (created_by) REFERENCES users(id),
                 FOREIGN KEY (updated_by) REFERENCES users(id)
             );
         `);
-
-
 
         // Institutions
         await connection.query(`
