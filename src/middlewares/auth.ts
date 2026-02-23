@@ -250,3 +250,35 @@ export const rateLimit = (maxRequests: number, windowMs: number) => {
 // Pre-configured rate limiters
 export const loginRateLimit = rateLimit(5, 15 * 60 * 1000); // 5 attempts per 15 minutes
 export const apiRateLimit = rateLimit(100, 60 * 1000); // 100 requests per minute
+
+/**
+ * Admin or Institute Admin Only Middleware
+ * Allows access if user has either Admin or Institute Admin role
+ */
+export const adminOrInstituteAdminOnly = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+  try {
+    if (!req.user) {
+      res.status(401).json({
+        status: 'error',
+        message: 'Authentication required'
+      });
+      return;
+    }
+
+    if (!req.user.roles.includes('Admin') && !req.user.roles.includes('Institute Admin')) {
+      res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Admin or Institute Admin role required.'
+      });
+      return;
+    }
+
+    next();
+  } catch (error) {
+    console.error('Admin or Institute Admin middleware error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+};

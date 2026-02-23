@@ -204,6 +204,102 @@ export async function initializeDatabase(): Promise<void> {
 
 
 
+        // Institutions
+        await connection.query(`
+            CREATE TABLE if not exists institutions (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                email VARCHAR(150) UNIQUE NOT NULL,
+                phone VARCHAR(15),
+                address TEXT,
+                status SMALLINT DEFAULT 1,
+                created_by BIGINT,
+                updated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                FOREIGN KEY (updated_by) REFERENCES users(id)
+            );
+        `);
+
+        // Institution Courses (Junction Table)
+        await connection.query(`
+            CREATE TABLE if not exists institution_courses (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                institution_id BIGINT NOT NULL,
+                course_id BIGINT NOT NULL,
+                status SMALLINT DEFAULT 1,
+                created_by BIGINT,
+                updated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_institution_course (institution_id, course_id),
+                FOREIGN KEY (institution_id) REFERENCES institutions(id) ON DELETE CASCADE,
+                FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                FOREIGN KEY (updated_by) REFERENCES users(id)
+            );
+        `);
+
+        // Students
+        await connection.query(`
+            CREATE TABLE if not exists students (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                first_name VARCHAR(100) NOT NULL,
+                last_name VARCHAR(100),
+                email VARCHAR(150) UNIQUE NOT NULL,
+                mobile VARCHAR(15),
+                status SMALLINT DEFAULT 1,
+                created_by BIGINT,
+                updated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                FOREIGN KEY (updated_by) REFERENCES users(id)
+            );
+        `);
+
+        // Institute Students (Junction Table)
+        await connection.query(`
+            CREATE TABLE if not exists institute_students (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                institution_id BIGINT NOT NULL,
+                student_id BIGINT NOT NULL,
+                status SMALLINT DEFAULT 1,
+                created_by BIGINT,
+                updated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_institute_student (institution_id, student_id),
+                FOREIGN KEY (institution_id) REFERENCES institutions(id) ON DELETE CASCADE,
+                FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                FOREIGN KEY (updated_by) REFERENCES users(id)
+            );
+        `);
+
+        // Student Courses (Junction Table)
+        await connection.query(`
+            CREATE TABLE if not exists student_courses (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                student_id BIGINT NOT NULL,
+                course_id BIGINT NOT NULL,
+                enrollment_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completion_date TIMESTAMP NULL,
+                progress DECIMAL(5,2) DEFAULT 0.00,
+                status SMALLINT DEFAULT 1,
+                created_by BIGINT,
+                updated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_student_course (student_id, course_id),
+                FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+                FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                FOREIGN KEY (updated_by) REFERENCES users(id)
+            );
+        `);
+
         // Course Ratings & Reviews
         await connection.query(`
             CREATE TABLE if not exists course_ratings (
@@ -218,6 +314,29 @@ export async function initializeDatabase(): Promise<void> {
                 UNIQUE KEY unique_rating (course_id, student_id),
                 FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
                 FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+        `);
+
+        // Student Content Progress Table
+        await connection.query(`
+            CREATE TABLE IF NOT EXISTS student_content_progress (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                student_id BIGINT NOT NULL,
+                course_id BIGINT NOT NULL,
+                content_id BIGINT NOT NULL,
+                is_completed BOOLEAN DEFAULT FALSE,
+                completed_at TIMESTAMP NULL,
+                time_spent INT DEFAULT 0,
+                created_by BIGINT,
+                updated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_student_content (student_id, course_id, content_id),
+                FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+                FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+                FOREIGN KEY (content_id) REFERENCES course_contents(id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES students(id),
+                FOREIGN KEY (updated_by) REFERENCES students(id)
             );
         `);
 

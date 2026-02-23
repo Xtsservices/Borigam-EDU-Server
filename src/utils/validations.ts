@@ -311,3 +311,192 @@ export const courseRatingValidation = {
     })
   })
 };
+
+// Institution validation schemas
+export const institutionValidation = {
+  // Create institution validation
+  createInstitution: Joi.object({
+    name: Joi.string().min(2).max(255).required().messages({
+      'string.min': 'Institution name must be at least 2 characters',
+      'string.max': 'Institution name cannot exceed 255 characters',
+      'any.required': 'Institution name is required'
+    }),
+    email: Joi.string().email().max(150).required().messages({
+      'string.email': 'Please provide a valid email address',
+      'string.max': 'Email cannot exceed 150 characters',
+      'any.required': 'Email is required'
+    }),
+    phone: Joi.string().pattern(/^[0-9]{10}$/).optional().messages({
+      'string.pattern.base': 'Phone number must be exactly 10 digits'
+    }),
+    address: Joi.string().min(10).max(1000).optional().messages({
+      'string.min': 'Address must be at least 10 characters',
+      'string.max': 'Address cannot exceed 1000 characters'
+    }),
+    course_ids: Joi.array().items(
+      Joi.number().integer().positive().messages({
+        'number.positive': 'Course ID must be a positive integer'
+      })
+    ).min(1).required().messages({
+      'array.min': 'At least one course must be selected',
+      'any.required': 'Course selection is required'
+    }),
+    status: Joi.number().integer().min(0).max(1).default(1).messages({
+      'number.min': 'Status must be 0 or 1',
+      'number.max': 'Status must be 0 or 1'
+    })
+  }),
+
+  // Update institution validation
+  updateInstitution: Joi.object({
+    name: Joi.string().min(2).max(255).optional(),
+    email: Joi.string().email().max(150).optional(),
+    phone: Joi.string().pattern(/^[0-9]{10}$/).optional(),
+    address: Joi.string().min(10).max(1000).optional(),
+    status: Joi.number().integer().min(0).max(1).optional()
+  }),
+
+  // Update institution courses validation
+  updateInstitutionCourses: Joi.object({
+    course_ids: Joi.array().items(
+      Joi.number().integer().positive()
+    ).min(0).required().messages({
+      'any.required': 'Course IDs array is required (can be empty to remove all courses)'
+    })
+  }),
+
+  // Institution ID validation
+  institutionId: Joi.number().integer().positive().required().messages({
+    'number.positive': 'Institution ID must be a positive integer',
+    'any.required': 'Institution ID is required'
+  }),
+
+  // Add single course to institution validation
+  addCourseToInstitution: Joi.object({
+    course_id: Joi.number().integer().positive().required().messages({
+      'number.positive': 'Course ID must be a positive integer',
+      'any.required': 'Course ID is required'
+    })
+  })
+};
+
+// Student validation schemas
+export const studentValidation = {
+  // Create student validation (for Admin - requires institution_id)
+  createStudentByAdmin: Joi.object({
+    first_name: Joi.string().min(2).max(100).required().messages({
+      'string.min': 'First name must be at least 2 characters',
+      'string.max': 'First name cannot exceed 100 characters',
+      'any.required': 'First name is required'
+    }),
+    last_name: Joi.string().min(2).max(100).optional().messages({
+      'string.min': 'Last name must be at least 2 characters',
+      'string.max': 'Last name cannot exceed 100 characters'
+    }),
+    email: Joi.string().email().max(150).required().messages({
+      'string.email': 'Please provide a valid email address',
+      'string.max': 'Email cannot exceed 150 characters',
+      'any.required': 'Email is required'
+    }),
+    mobile: Joi.string().pattern(/^[0-9]{10}$/).optional().messages({
+      'string.pattern.base': 'Mobile number must be exactly 10 digits'
+    }),
+    institution_id: Joi.number().integer().positive().required().messages({
+      'number.positive': 'Institution ID must be a positive integer',
+      'any.required': 'Institution ID is required'
+    }),
+    course_ids: Joi.array().items(
+      Joi.number().integer().positive().messages({
+        'number.positive': 'Course ID must be a positive integer'
+      })
+    ).min(1).required().messages({
+      'array.min': 'At least one course must be selected',
+      'any.required': 'Course selection is required'
+    }),
+    status: Joi.number().integer().min(0).max(1).default(1).messages({
+      'number.min': 'Status must be 0 or 1',
+      'number.max': 'Status must be 0 or 1'
+    })
+  }),
+
+  // Create student validation (for Institute Admin - no institution_id needed)
+  createStudentByInstituteAdmin: Joi.object({
+    first_name: Joi.string().min(2).max(100).required().messages({
+      'string.min': 'First name must be at least 2 characters',
+      'string.max': 'First name cannot exceed 100 characters',
+      'any.required': 'First name is required'
+    }),
+    last_name: Joi.string().min(2).max(100).optional().messages({
+      'string.min': 'Last name must be at least 2 characters',
+      'string.max': 'Last name cannot exceed 100 characters'
+    }),
+    email: Joi.string().email().max(150).required().messages({
+      'string.email': 'Please provide a valid email address',
+      'string.max': 'Email cannot exceed 150 characters',
+      'any.required': 'Email is required'
+    }),
+    mobile: Joi.string().pattern(/^[0-9]{10}$/).optional().messages({
+      'string.pattern.base': 'Mobile number must be exactly 10 digits'
+    }),
+    course_ids: Joi.array().items(
+      Joi.number().integer().positive().messages({
+        'number.positive': 'Course ID must be a positive integer'
+      })
+    ).min(1).required().messages({
+      'array.min': 'At least one course must be selected',
+      'any.required': 'Course selection is required'
+    }),
+    status: Joi.number().integer().min(0).max(1).default(1).messages({
+      'number.min': 'Status must be 0 or 1',
+      'number.max': 'Status must be 0 or 1'
+    })
+  }),
+
+  // Update student validation
+  updateStudent: Joi.object({
+    first_name: Joi.string().min(2).max(100).optional(),
+    last_name: Joi.string().min(2).max(100).optional(),
+    email: Joi.string().email().max(150).optional(),
+    mobile: Joi.string().pattern(/^[0-9]{10}$/).optional(),
+    status: Joi.number().integer().min(0).max(1).optional()
+  }),
+
+  // Student ID validation
+  studentId: Joi.number().integer().positive().required().messages({
+    'number.positive': 'Student ID must be a positive integer',
+    'any.required': 'Student ID is required'
+  }),
+
+  // Course enrollment validation
+  enrollInCourse: Joi.object({
+    course_id: Joi.number().integer().positive().required().messages({
+      'number.positive': 'Course ID must be a positive integer',
+      'any.required': 'Course ID is required'
+    })
+  }),
+
+  // Multiple course enrollment validation
+  enrollInMultipleCourses: Joi.object({
+    course_ids: Joi.array().items(
+      Joi.number().integer().positive()
+    ).min(1).required().messages({
+      'array.min': 'At least one course must be selected',
+      'any.required': 'Course IDs are required'
+    })
+  }),
+
+  // Update course progress validation
+  updateCourseProgress: Joi.object({
+    progress: Joi.number().min(0).max(100).required().messages({
+      'number.min': 'Progress must be between 0 and 100',
+      'number.max': 'Progress must be between 0 and 100',
+      'any.required': 'Progress is required'
+    })
+  }),
+
+  // Institution ID validation (for admin operations)
+  institutionId: Joi.number().integer().positive().required().messages({
+    'number.positive': 'Institution ID must be a positive integer',
+    'any.required': 'Institution ID is required'
+  })
+};

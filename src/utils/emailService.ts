@@ -21,6 +21,15 @@ interface PasswordResetEmailData {
   email: string;
 }
 
+interface StudentWelcomeEmailData {
+  firstName: string;
+  lastName?: string;
+  email: string;
+  tempPassword: string;
+  institutionName: string;
+  courses: Array<{ id: number; title: string; description?: string }>;
+}
+
 export class EmailService {
   private static transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
@@ -235,5 +244,107 @@ export class EmailService {
     
     // Shuffle the password
     return password.split('').sort(() => 0.5 - Math.random()).join('');
+  }
+
+  /**
+   * Send welcome email to newly created students
+   */
+  static async sendStudentWelcomeEmail(data: any): Promise<boolean> {
+    const { firstName, lastName, email, tempPassword, institutionName, courses } = data;
+    const fullName = `${firstName}${lastName ? ' ' + lastName : ''}`;
+
+    const coursesList = courses.map((course: any) => 
+      `<li><strong>${course.title}</strong>${course.description ? ` - ${course.description}` : ''}</li>`
+    ).join('');
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          .container { max-width: 600px; margin: 0 auto; font-family: Arial, sans-serif; }
+          .header { background: #2c3e50; color: white; padding: 20px; text-align: center; }
+          .content { padding: 30px; background: #f8f9fa; }
+          .credentials { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
+          .courses { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
+          .button { background: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; margin: 20px 0; }
+          .footer { background: #34495e; color: white; padding: 20px; text-align: center; font-size: 12px; }
+          .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 6px; margin: 15px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Welcome to ${institutionName}</h1>
+            <h2>Borigam Education Platform</h2>
+          </div>
+          <div class="content">
+            <h2>Hello ${fullName},</h2>
+            <p>Welcome to the Borigam Education Platform! Your student account has been created successfully for <strong>${institutionName}</strong>.</p>
+            
+            <div class="credentials">
+              <h3>Your Login Credentials:</h3>
+              <p><strong>Email:</strong> ${email}</p>
+              <p><strong>Temporary Password:</strong> ${tempPassword}</p>
+            </div>
+
+            <div class="courses">
+              <h3>🎓 Your Enrolled Courses:</h3>
+              <ul style="padding-left: 20px;">
+                ${coursesList}
+              </ul>
+              <p><em>You now have access to ${courses.length} course${courses.length !== 1 ? 's' : ''} offered by ${institutionName}.</em></p>
+            </div>
+
+            <div class="warning">
+              <h4>⚠️ Important Security Information:</h4>
+              <ul>
+                <li>This is a temporary password for your first login</li>
+                <li>Please change your password immediately after login</li>
+                <li>Keep your credentials secure and do not share them</li>
+                <li>Contact your institution administrator if you need help</li>
+              </ul>
+            </div>
+
+            <a href="${process.env.FRONTEND_URL || 'http://localhost:3001'}/login" class="button">
+              Login to Start Learning
+            </a>
+
+            <p>If you have any questions or need assistance, please contact your institution administrator or our support team.</p>
+          </div>
+          <div class="footer">
+            <p>© 2026 Borigam Education. All rights reserved.</p>
+            <p>This email contains sensitive information. Please keep it confidential.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const text = `
+      Welcome to ${institutionName} - Borigam Education Platform!
+      
+      Hello ${fullName},
+      
+      Your student account has been created successfully.
+      
+      Login Credentials:
+      Email: ${email}
+      Temporary Password: ${tempPassword}
+      
+      Enrolled Courses:
+      ${courses.map((course: any) => `- ${course.title}`).join('\n      ')}
+      
+      Important: This is a temporary password. Please change it after your first login.
+      
+      Login URL: ${process.env.FRONTEND_URL || 'http://localhost:3001'}/login
+    `;
+
+    return this.sendEmail({
+      to: email,
+      subject: `Welcome to ${institutionName} - Your Student Account is Ready!`,
+      html,
+      text
+    });
   }
 }
