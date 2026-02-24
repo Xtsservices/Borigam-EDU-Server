@@ -32,7 +32,7 @@ router.use('/users', userRoutes);
 // Role management routes
 router.use('/roles', roleRoutes);
 
-// Course management routes
+// Course management routes (includes content access)
 router.use('/courses', courseRoutes);
 
 // Institution management routes
