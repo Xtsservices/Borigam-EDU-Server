@@ -22,14 +22,11 @@ router.use(apiRateLimit);
 router.use(authenticateToken);
 
 /**
- * Student Creation Routes (Different logic for Admin vs Institute Admin)
+ * Student Creation Routes (Unified endpoint)
  */
 
-// Admin creates student (requires institution selection)
-router.post('/admin', adminOnly, StudentController.createStudentByAdmin);
-
-// Institute Admin creates student (uses their institution)
-router.post('/institute-admin', adminOrInstituteAdminOnly, StudentController.createStudentByInstituteAdmin);
+// Create student (Admin can specify institution, Institute Admin uses their own)
+router.post('/', adminOrInstituteAdminOnly, StudentController.createStudent);
 
 /**
  * Student CRUD Routes
@@ -43,6 +40,12 @@ router.get('/institution/:id', adminOrInstituteAdminOnly, StudentController.getS
 
 // Get student by ID with complete details
 router.get('/:id', adminOrInstituteAdminOnly, StudentController.getStudentById);
+
+// Update student (unified endpoint for all updates)
+router.put('/:id', adminOrInstituteAdminOnly, StudentController.updateStudent);
+
+// Delete student (soft delete)
+router.delete('/:id', adminOrInstituteAdminOnly, StudentController.deleteStudent);
 
 /**
  * Student Progress Tracking Routes
