@@ -35,24 +35,13 @@ interface AuthenticatedRequest extends Request {
   };
 }
 
-interface CreateStudentByAdminRequest extends AuthenticatedRequest {
+interface CreateStudentRequest extends AuthenticatedRequest {
   body: {
     first_name: string;
     last_name?: string;
     email: string;
     mobile?: string;
-    institution_id: number;
-    course_ids: number[];
-    status?: number;
-  };
-}
-
-interface CreateStudentByInstituteAdminRequest extends AuthenticatedRequest {
-  body: {
-    first_name: string;
-    last_name?: string;
-    email: string;
-    mobile?: string;
+    institution_id?: number; // Optional - only for Admin, auto-determined for Institute Admin
     course_ids: number[];
     status?: number;
   };
@@ -65,18 +54,9 @@ interface UpdateStudentRequest extends AuthenticatedRequest {
     email?: string;
     mobile?: string;
     status?: number;
-  };
-}
-
-interface EnrollCourseRequest extends AuthenticatedRequest {
-  body: {
-    course_id: number;
-  };
-}
-
-interface EnrollMultipleCoursesRequest extends AuthenticatedRequest {
-  body: {
-    course_ids: number[];
+    course_ids?: number[]; // Optional - if provided, replaces all student courses
+    add_course_ids?: number[]; // Optional - adds these courses to existing ones
+    remove_course_ids?: number[]; // Optional - removes these courses from student
   };
 }
 
@@ -123,23 +103,60 @@ export class StudentController {
   }
 
   /**
-   * Create student by Admin (requires institution selection)
-   * POST /api/students/admin
+   * Create student (unified endpoint for Admin and Institute Admin)
+   * POST /api/students
    */
-  static async createStudentByAdmin(req: CreateStudentByAdminRequest, res: Response): Promise<void> {
+  static async createStudent(req: CreateStudentRequest, res: Response): Promise<void> {
     try {
-      // Check admin role
-      if (!StudentController.checkAdminRole(req, res)) {
+      // Check if user has required role
+      if (!req.user || (!req.user.roles.includes('Admin') && !req.user.roles.includes('Institute Admin'))) {
+        res.status(403).json({
+          status: 'error',
+          message: 'Access denied. Only administrators and institute administrators can create students.'
+        });
+        return;
+      }
+
+      // Check if request body exists
+      if (!req.body) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Request body is missing. Please send JSON data with Content-Type: application/json'
+        });
         return;
       }
 
       const { first_name, last_name, email, mobile, institution_id, course_ids, status = 1 } = req.body;
+      const isAdmin = req.user.roles.includes('Admin');
+      const isInstituteAdmin = req.user.roles.includes('Institute Admin');
 
-      // Validate input data
-      const validation = validateData(
-        { first_name, last_name, email, mobile, institution_id, course_ids, status }, 
-        studentValidation.createStudentByAdmin
-      );
+      // Role-based validation for institution_id
+      if (isAdmin && !institution_id) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Institution ID is required for admin users'
+        });
+        return;
+      }
+
+      if (isInstituteAdmin && institution_id) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Institution ID should not be provided for institute admin users'
+        });
+        return;
+      }
+
+      // Validate input data based on role
+      const validationSchema = isAdmin 
+        ? studentValidation.createStudentByAdmin 
+        : studentValidation.createStudentByInstituteAdmin;
+
+      const validationData = isAdmin 
+        ? { first_name, last_name, email, mobile, institution_id, course_ids, status }
+        : { first_name, last_name, email, mobile, course_ids, status };
+
+      const validation = validateData(validationData, validationSchema);
       
       if (!validation.isValid) {
         res.status(400).json({
@@ -152,6 +169,24 @@ export class StudentController {
 
       await DatabaseTransaction.executeTransaction(async (connection) => {
         
+        // Determine institution_id based on user role
+        let finalInstitutionId: number;
+
+        if (isAdmin) {
+          finalInstitutionId = institution_id!;
+        } else {
+          // Institute Admin - get their institution
+          const adminInstitutionId = await StudentController.getInstituteAdminInstitution(req.user!.id, connection);
+          if (!adminInstitutionId) {
+            res.status(400).json({
+              status: 'error',
+              message: 'Institution not found for the current institute administrator'
+            });
+            return;
+          }
+          finalInstitutionId = adminInstitutionId;
+        }
+
         // Check if student email already exists
         const existingStudent = await DatabaseHelpers.executeSelectOne(
           connection,
@@ -216,7 +251,7 @@ export class StudentController {
         const institution = await DatabaseHelpers.executeSelectOne(
           connection,
           InstitutionQueries.getInstitutionById,
-          [institution_id]
+          [finalInstitutionId]
         );
 
         if (!institution) {
@@ -248,7 +283,7 @@ export class StudentController {
           const institutionCourse = await DatabaseHelpers.executeSelectOne(
             connection,
             'SELECT id FROM institution_courses WHERE institution_id = ? AND course_id = ? AND status = 1',
-            [institution_id, courseId]
+            [finalInstitutionId, courseId]
           );
 
           if (!institutionCourse) {
@@ -326,7 +361,6 @@ export class StudentController {
             last_name || null,
             email,
             mobile || null,
-            studentUserId,
             req.user!.id,
             req.user!.id
           ]
@@ -336,7 +370,7 @@ export class StudentController {
         await DatabaseHelpers.executeInsert(
           connection,
           InstituteStudentsQueries.assignStudentToInstitution,
-          [institution_id, studentId, req.user!.id, req.user!.id]
+          [finalInstitutionId, studentId, req.user!.id, req.user!.id]
         );
 
         // Step 7: Enroll student in courses
@@ -377,13 +411,16 @@ export class StudentController {
               last_name: last_name || null,
               email,
               mobile: mobile || null,
-              institution: {
-                id: institution_id,
-                name: institution.name
-              },
-              courses: validCourses,
               status
             },
+            institution: {
+              id: finalInstitutionId,
+              name: institution.name
+            },
+            enrolledCourses: validCourses.map(course => ({
+              course_id: course.id,
+              title: course.title
+            })),
             credentials_sent: true
           }
         });
@@ -402,13 +439,26 @@ export class StudentController {
    * Create student by Institute Admin (uses admin's institution)
    * POST /api/students/institute-admin
    */
-  static async createStudentByInstituteAdmin(req: CreateStudentByInstituteAdminRequest, res: Response): Promise<void> {
+  static async createStudentByInstituteAdmin(req: CreateStudentRequest, res: Response): Promise<void> {
     try {
       // Check institute admin role
       if (!req.user || !req.user.roles.includes('Institute Admin')) {
         res.status(403).json({
           status: 'error',
           message: 'Access denied. Only institute administrators can perform this action.'
+        });
+        return;
+      }
+
+      // Debug: Log request body to see what's being received
+      console.log('📝 Request body received:', req.body);
+      console.log('📝 Content-Type:', req.headers['content-type']);
+
+      // Check if request body exists
+      if (!req.body) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Request body is missing. Please send JSON data with Content-Type: application/json'
         });
         return;
       }
@@ -432,24 +482,6 @@ export class StudentController {
 
       await DatabaseTransaction.executeTransaction(async (connection) => {
         
-        // Get Institute Admin's institution
-        const institution_id = await StudentController.getInstituteAdminInstitution(req.user!.id, connection);
-
-        if (!institution_id) {
-          res.status(400).json({
-            status: 'error',
-            message: 'Institution not found for the current institute administrator'
-          });
-          return;
-        }
-
-        // Get institution details
-        const institution = await DatabaseHelpers.executeSelectOne(
-          connection,
-          InstitutionQueries.getInstitutionById,
-          [institution_id]
-        );
-
         // Check if student email already exists
         const existingStudent = await DatabaseHelpers.executeSelectOne(
           connection,
@@ -510,6 +542,17 @@ export class StudentController {
           return;
         }
 
+        // Get Institute Admin's institution
+        const institution = await StudentController.getInstituteAdminInstitution(req.user!.id, connection);
+        
+        if (!institution) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Institution not found for this administrator'
+          });
+          return;
+        }
+
         // Validate all course IDs exist and belong to the institution
         const validCourses = [];
         for (const courseId of course_ids) {
@@ -531,7 +574,7 @@ export class StudentController {
           const institutionCourse = await DatabaseHelpers.executeSelectOne(
             connection,
             'SELECT id FROM institution_courses WHERE institution_id = ? AND course_id = ? AND status = 1',
-            [institution_id, courseId]
+            [institution, courseId]
           );
 
           if (!institutionCourse) {
@@ -609,7 +652,6 @@ export class StudentController {
             last_name || null,
             email,
             mobile || null,
-            studentUserId,
             req.user!.id,
             req.user!.id
           ]
@@ -619,7 +661,7 @@ export class StudentController {
         await DatabaseHelpers.executeInsert(
           connection,
           InstituteStudentsQueries.assignStudentToInstitution,
-          [institution_id, studentId, req.user!.id, req.user!.id]
+          [institution, studentId, req.user!.id, req.user!.id]
         );
 
         // Step 7: Enroll student in courses
@@ -638,7 +680,7 @@ export class StudentController {
             lastName: last_name,
             email,
             tempPassword,
-            institutionName: institution.name,
+            institutionName: 'Institute', // Will be resolved from institution ID
             courses: validCourses
           });
 
@@ -652,7 +694,7 @@ export class StudentController {
 
         res.status(201).json({
           status: 'success',
-          message: 'Student created successfully',
+          message: 'Student created successfully by Institute Admin',
           data: {
             student: {
               id: studentId,
@@ -660,13 +702,10 @@ export class StudentController {
               last_name: last_name || null,
               email,
               mobile: mobile || null,
-              institution: {
-                id: institution_id,
-                name: institution.name
-              },
-              courses: validCourses,
-              status
+              institution_id: institution,
+              status: 1
             },
+            courses: validCourses,
             credentials_sent: true
           }
         });
@@ -875,6 +914,489 @@ export class StudentController {
         message: 'Internal server error occurred while fetching student'
       });
     }
+  }
+
+  /**
+   * Update student (unified endpoint for all updates)
+   * PUT /api/students/:id
+   */
+  static async updateStudent(req: UpdateStudentRequest, res: Response): Promise<void> {
+    try {
+      // Check admin or institute admin role
+      if (!StudentController.checkAdminOrInstituteAdminRole(req, res)) {
+        return;
+      }
+
+      const studentId = parseInt(req.params.id as string);
+      const {
+        first_name,
+        last_name,
+        email,
+        mobile,
+        status,
+        course_ids,
+        add_course_ids,
+        remove_course_ids
+      } = req.body;
+
+      // Validate student ID
+      if (!studentId || isNaN(studentId)) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Invalid student ID'
+        });
+        return;
+      }
+
+      // Validate that user is not trying to conflict course operations
+      const courseOperations = [course_ids, add_course_ids, remove_course_ids].filter(op => op && op.length > 0);
+      if (courseOperations.length > 1) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Cannot perform multiple course operations simultaneously. Use either course_ids (replace all), add_course_ids, or remove_course_ids.'
+        });
+        return;
+      }
+
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        // Check if student exists
+        const existingStudent = await DatabaseHelpers.executeSelectOne(
+          connection,
+          StudentQueries.getStudentById,
+          [studentId]
+        );
+
+        if (!existingStudent) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Student not found'
+          });
+          return;
+        }
+
+        // Get the user record for this student using email
+        const existingUser = await DatabaseHelpers.executeSelectOne(
+          connection,
+          'SELECT id FROM users WHERE email = ? AND status = 1',
+          [existingStudent.email]
+        );
+
+        if (!existingUser) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Associated user record not found for this student'
+          });
+          return;
+        }
+
+        // If Institute Admin, verify they can access this student
+        if (req.user!.roles.includes('Institute Admin') && !req.user!.roles.includes('Admin')) {
+          const adminInstitution = await StudentController.getInstituteAdminInstitution(req.user!.id, connection);
+          
+          const studentInstitution = await DatabaseHelpers.executeSelectOne(
+            connection,
+            'SELECT i.id FROM institutions i JOIN institute_students ins ON i.id = ins.institution_id WHERE ins.student_id = ? AND ins.status = 1',
+            [studentId]
+          );
+          
+          if (!studentInstitution || adminInstitution !== studentInstitution.id) {
+            res.status(403).json({
+              status: 'error',
+              message: 'Access denied. You can only update students from your own institution.'
+            });
+            return;
+          }
+        }
+
+        // Validate email uniqueness (if email is being updated)
+        if (email && email !== existingStudent.email) {
+          const existingEmail = await DatabaseHelpers.executeSelectOne(
+            connection,
+            StudentQueries.getStudentByEmail,
+            [email]
+          );
+
+          if (existingEmail) {
+            res.status(400).json({
+              status: 'error',
+              message: 'Email address is already in use by another student'
+            });
+            return;
+          }
+
+          // Also check users table
+          const existingUserEmail = await DatabaseHelpers.executeSelectOne(
+            connection,
+            UserQueries.getUserByEmail,
+            [email]
+          );
+
+          if (existingUserEmail && existingUserEmail.id !== existingUser.id) {
+            res.status(400).json({
+              status: 'error',
+              message: 'Email address is already in use by another user'
+            });
+            return;
+          }
+        }
+
+        // Validate mobile uniqueness (if mobile is being updated)
+        if (mobile && mobile !== existingStudent.mobile) {
+          const existingMobile = await DatabaseHelpers.executeSelectOne(
+            connection,
+            StudentQueries.checkMobileExists,
+            [mobile]
+          );
+
+          if (existingMobile && existingMobile.student_id !== studentId) {
+            res.status(400).json({
+              status: 'error',
+              message: 'Mobile number is already in use by another student'
+            });
+            return;
+          }
+        }
+
+        // Update student basic information if any fields are provided
+        const hasBasicUpdates = first_name || last_name || email || mobile || status !== undefined;
+        
+        if (hasBasicUpdates) {
+          const updateFields = [];
+          const updateValues = [];
+
+          if (first_name) {
+            updateFields.push('first_name = ?');
+            updateValues.push(first_name);
+          }
+          if (last_name !== undefined) {
+            updateFields.push('last_name = ?');
+            updateValues.push(last_name || null);
+          }
+          if (email) {
+            updateFields.push('email = ?');
+            updateValues.push(email);
+          }
+          if (mobile !== undefined) {
+            updateFields.push('mobile = ?');  
+            updateValues.push(mobile || null);
+          }
+          if (status !== undefined) {
+            updateFields.push('status = ?');
+            updateValues.push(status);
+          }
+
+          updateFields.push('updated_by = ?', 'updated_at = CURRENT_TIMESTAMP');
+          updateValues.push(req.user!.id);
+
+          const updateQuery = `UPDATE students SET ${updateFields.join(', ')} WHERE id = ?`;
+          updateValues.push(studentId);
+
+          await DatabaseHelpers.executeQuery(connection, updateQuery, updateValues);
+
+          // Also update the users table if email is changed
+          if (email && email !== existingStudent.email) {
+            await DatabaseHelpers.executeQuery(
+              connection,
+              'UPDATE users SET email = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+              [email, req.user!.id, existingUser.id]
+            );
+
+            // Update login table
+            await DatabaseHelpers.executeQuery(
+              connection,
+              'UPDATE login SET username = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
+              [email, req.user!.id, existingUser.id]
+            );
+          }
+
+          // Update users table for other fields
+          if (first_name || last_name || mobile !== undefined) {
+            const userUpdateFields = [];
+            const userUpdateValues = [];
+
+            if (first_name) {
+              userUpdateFields.push('first_name = ?');
+              userUpdateValues.push(first_name);
+            }
+            if (last_name !== undefined) {
+              userUpdateFields.push('last_name = ?');
+              userUpdateValues.push(last_name || null);
+            }
+            if (mobile !== undefined) {
+              userUpdateFields.push('phone = ?');
+              userUpdateValues.push(mobile || null);
+            }
+
+            if (userUpdateFields.length > 0) {
+              userUpdateFields.push('updated_by = ?', 'updated_at = CURRENT_TIMESTAMP');
+              userUpdateValues.push(req.user!.id);
+              userUpdateValues.push(existingUser.id);
+
+              const userUpdateQuery = `UPDATE users SET ${userUpdateFields.join(', ')} WHERE id = ?`;
+              await DatabaseHelpers.executeQuery(connection, userUpdateQuery, userUpdateValues);
+            }
+          }
+        }
+
+        // Handle course operations
+        let updatedCourses = [];
+        
+        if (course_ids && course_ids.length > 0) {
+          // Replace all courses
+          await StudentController.validateInstitutionCourses(connection, studentId, course_ids);
+          
+          // Remove all existing courses
+          await DatabaseHelpers.executeQuery(
+            connection,
+            'UPDATE student_courses SET status = 0, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE student_id = ?',
+            [req.user!.id, studentId]
+          );
+
+          // Add new courses
+          for (const courseId of course_ids) {
+            await DatabaseHelpers.executeQuery(
+              connection,
+              StudentCoursesQueries.upsertStudentCourse,
+              [studentId, courseId, req.user!.id, req.user!.id]
+            );
+          }
+
+          updatedCourses = await StudentController.getStudentCourses(connection, studentId);
+
+        } else if (add_course_ids && add_course_ids.length > 0) {
+          // Add courses to existing ones
+          await StudentController.validateInstitutionCourses(connection, studentId, add_course_ids);
+          
+          for (const courseId of add_course_ids) {
+            // Check if student is already enrolled
+            const existingEnrollment = await DatabaseHelpers.executeSelectOne(
+              connection,
+              'SELECT id FROM student_courses WHERE student_id = ? AND course_id = ? AND status = 1',
+              [studentId, courseId]
+            );
+
+            if (!existingEnrollment) {
+              await DatabaseHelpers.executeQuery(
+                connection,
+                StudentCoursesQueries.upsertStudentCourse,
+                [studentId, courseId, req.user!.id, req.user!.id]
+              );
+            }
+          }
+
+          updatedCourses = await StudentController.getStudentCourses(connection, studentId);
+
+        } else if (remove_course_ids && remove_course_ids.length > 0) {
+          // Remove specified courses
+          for (const courseId of remove_course_ids) {
+            await DatabaseHelpers.executeQuery(
+              connection,
+              'UPDATE student_courses SET status = 0, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE student_id = ? AND course_id = ?',
+              [req.user!.id, studentId, courseId]
+            );
+          }
+
+          updatedCourses = await StudentController.getStudentCourses(connection, studentId);
+        }
+
+        // Get updated student information
+        const updatedStudent = await DatabaseHelpers.executeSelectOne(
+          connection,
+          StudentQueries.getStudentById,
+          [studentId]
+        );
+
+        // Get institution information
+        const institution = await DatabaseHelpers.executeSelectOne(
+          connection,
+          `SELECT i.id, i.name FROM institutions i 
+           JOIN institute_students ins ON i.id = ins.institution_id 
+           WHERE ins.student_id = ? AND ins.status = 1`,
+          [studentId]
+        );
+
+        res.status(200).json({
+          status: 'success',
+          message: 'Student updated successfully',
+          data: {
+            student: {
+              id: updatedStudent.id,
+              first_name: updatedStudent.first_name,
+              last_name: updatedStudent.last_name,
+              email: updatedStudent.email,
+              mobile: updatedStudent.mobile,
+              status: updatedStudent.status,
+              updated_at: updatedStudent.updated_at
+            },
+            institution: institution ? {
+              id: institution.id,
+              name: institution.name
+            } : null,
+            courses: updatedCourses
+          }
+        });
+      });
+
+    } catch (error) {
+      console.error('Error updating student:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error occurred while updating student'
+      });
+    }
+  }
+
+  /**
+   * Delete student (soft delete)
+   * DELETE /api/students/:id
+   */
+  static async deleteStudent(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      // Check admin or institute admin role
+      if (!StudentController.checkAdminOrInstituteAdminRole(req, res)) {
+        return;
+      }
+
+      const studentId = parseInt(req.params.id as string);
+
+      if (!studentId || isNaN(studentId)) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Invalid student ID'
+        });
+        return;
+      }
+
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        // Check if student exists
+        const existingStudent = await DatabaseHelpers.executeSelectOne(
+          connection,
+          StudentQueries.getStudentById,
+          [studentId]
+        );
+
+        if (!existingStudent) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Student not found'
+          });
+          return;
+        }
+
+        // Get the user record for this student using email
+        const existingUser = await DatabaseHelpers.executeSelectOne(
+          connection,
+          'SELECT id FROM users WHERE email = ? AND status = 1',
+          [existingStudent.email]
+        );
+
+        if (!existingUser) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Associated user record not found for this student'
+          });
+          return;
+        }
+
+        // If Institute Admin, verify they can access this student
+        if (req.user!.roles.includes('Institute Admin') && !req.user!.roles.includes('Admin')) {
+          const adminInstitution = await StudentController.getInstituteAdminInstitution(req.user!.id, connection);
+          
+          const studentInstitution = await DatabaseHelpers.executeSelectOne(
+            connection,
+            'SELECT i.id FROM institutions i JOIN institute_students ins ON i.id = ins.institution_id WHERE ins.student_id = ? AND ins.status = 1',
+            [studentId]
+          );
+          
+          if (!studentInstitution || adminInstitution !== studentInstitution.id) {
+            res.status(403).json({
+              status: 'error',
+              message: 'Access denied. You can only delete students from your own institution.'
+            });
+            return;
+          }
+        }
+
+        // Soft delete student
+        await DatabaseHelpers.executeQuery(
+          connection,
+          'UPDATE students SET status = 0, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+          [req.user!.id, studentId]
+        );
+
+        // Soft delete user
+        await DatabaseHelpers.executeQuery(
+          connection,
+          'UPDATE users SET status = 0, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+          [req.user!.id, existingUser.id]
+        );
+
+        // Soft delete student courses
+        await DatabaseHelpers.executeQuery(
+          connection,
+          'UPDATE student_courses SET status = 0, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE student_id = ?',
+          [req.user!.id, studentId]
+        );
+
+        // Soft delete institution assignment
+        await DatabaseHelpers.executeQuery(
+          connection,
+          'UPDATE institute_students SET status = 0, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE student_id = ?',
+          [req.user!.id, studentId]
+        );
+
+        res.status(200).json({
+          status: 'success',
+          message: 'Student deleted successfully'
+        });
+      });
+
+    } catch (error) {
+      console.error('Error deleting student:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error occurred while deleting student'
+      });
+    }
+  }
+
+  // Helper methods for the update functionality
+  private static async validateInstitutionCourses(connection: any, studentId: number, courseIds: number[]): Promise<void> {
+    // Get student's institution
+    const studentInstitution = await DatabaseHelpers.executeSelectOne(
+      connection,
+      'SELECT i.id FROM institutions i JOIN institute_students ins ON i.id = ins.institution_id WHERE ins.student_id = ? AND ins.status = 1',
+      [studentId]
+    );
+
+    if (!studentInstitution) {
+      throw new Error('Student institution not found');
+    }
+
+    // Validate all courses are offered by the institution
+    for (const courseId of courseIds) {
+      const institutionCourse = await DatabaseHelpers.executeSelectOne(
+        connection,
+        'SELECT id FROM institution_courses WHERE institution_id = ? AND course_id = ? AND status = 1',
+        [studentInstitution.id, courseId]
+      );
+
+      if (!institutionCourse) {
+        const course = await DatabaseHelpers.executeSelectOne(connection, 'SELECT title FROM courses WHERE id = ?', [courseId]);
+        throw new Error(`Course "${course?.title || courseId}" is not offered by the student's institution`);
+      }
+    }
+  }
+
+  private static async getStudentCourses(connection: any, studentId: number): Promise<any[]> {
+    return await DatabaseHelpers.executeSelect(
+      connection,
+      `SELECT c.id, c.title, sc.enrollment_date 
+       FROM student_courses sc 
+       JOIN courses c ON sc.course_id = c.id 
+       WHERE sc.student_id = ? AND sc.status = 1`,
+      [studentId]
+    );
   }
 
   /**
