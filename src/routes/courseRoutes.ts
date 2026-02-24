@@ -128,8 +128,14 @@ router.post('/:courseId/sections/:sectionId/contents/upload',
  * Content Access Routes
  */
 
-// Get content with signed URL for secure access
+// Get content with signed URL for secure access (automatic progress tracking for students)
 router.get('/:courseId/contents/:contentId/access', CourseController.getContentAccess);
+
+// Get my progress for a course (Students only)
+router.get('/:courseId/my-progress', CourseController.getMyProgress);
+
+// Get student progress (Admin/Institute Admin only)
+router.get('/:courseId/students/:studentId/progress', CourseController.getStudentProgress);
 
 // Delete content (Admin only)
 router.delete('/:courseId/contents/:contentId', adminOnly, CourseController.deleteContent);

@@ -337,6 +337,8 @@ export async function initializeDatabase(): Promise<void> {
                 student_id BIGINT NOT NULL,
                 course_id BIGINT NOT NULL,
                 content_id BIGINT NOT NULL,
+                is_accessed BOOLEAN DEFAULT FALSE,
+                accessed_at TIMESTAMP NULL,
                 is_completed BOOLEAN DEFAULT FALSE,
                 completed_at TIMESTAMP NULL,
                 time_spent INT DEFAULT 0,
@@ -348,8 +350,8 @@ export async function initializeDatabase(): Promise<void> {
                 FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
                 FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
                 FOREIGN KEY (content_id) REFERENCES course_contents(id) ON DELETE CASCADE,
-                FOREIGN KEY (created_by) REFERENCES students(id),
-                FOREIGN KEY (updated_by) REFERENCES students(id)
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                FOREIGN KEY (updated_by) REFERENCES users(id)
             );
         `);
 

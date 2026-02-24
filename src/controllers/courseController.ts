@@ -958,8 +958,40 @@ export class CourseController {
           [sectionId]
         );
 
+        // For students, add progress information and auto-track section view
+        let contentsWithProgress = contents;
+        if (req.user!.roles.includes('Student')) {
+          const student = await DatabaseHelpers.executeSelectOne(
+            connection,
+            'SELECT id FROM students WHERE user_id = ? AND status = 1',
+            [req.user!.id]
+          );
+
+          if (student) {
+            contentsWithProgress = await Promise.all(contents.map(async (content) => {
+              const progress = await DatabaseHelpers.executeSelectOne(
+                connection,
+                `SELECT is_accessed, is_completed, accessed_at, completed_at 
+                 FROM student_content_progress 
+                 WHERE student_id = ? AND course_id = ? AND content_id = ?`,
+                [student.id, courseId, content.id]
+              );
+
+              return {
+                ...content,
+                progress: {
+                  is_accessed: progress?.is_accessed || false,
+                  is_completed: progress?.is_completed || false,
+                  accessed_at: progress?.accessed_at || null,
+                  completed_at: progress?.completed_at || null
+                }
+              };
+            }));
+          }
+        }
+
         // Generate signed URLs for all content
-        for (const content of contents) {
+        for (const content of contentsWithProgress) {
           await processContentSignedUrls(content);
         }
 
@@ -975,7 +1007,9 @@ export class CourseController {
               course_id: courseId,
               course_title: section.course_title
             },
-            contents
+            contents: contentsWithProgress,
+            userRole: req.user!.roles[0],
+            hasProgress: req.user!.roles.includes('Student')
           }
         });
       });
@@ -1357,6 +1391,74 @@ export class CourseController {
           return;
         }
 
+        // Auto-track access for students when they view content
+        let studentProgress = null;
+        if (req.user!.roles.includes('Student')) {
+          const student = await DatabaseHelpers.executeSelectOne(
+            connection,
+            'SELECT id FROM students WHERE user_id = ? AND status = 1',
+            [req.user!.id]
+          );
+
+          if (student) {
+            // Check enrollment first
+            const enrollment = await DatabaseHelpers.executeSelectOne(
+              connection,
+              `SELECT id FROM student_courses 
+               WHERE student_id = ? AND course_id = ? AND status = 1`,
+              [student.id, courseId]
+            );
+
+            if (!enrollment) {
+              res.status(403).json({
+                status: 'error',
+                message: 'You are not enrolled in this course'
+              });
+              return;
+            }
+
+            // Auto-mark as accessed when viewing content
+            await DatabaseHelpers.executeQuery(
+              connection,
+              `INSERT INTO student_content_progress 
+               (student_id, course_id, content_id, is_accessed, accessed_at, created_by, updated_by)
+               VALUES (?, ?, ?, ?, NOW(), ?, ?)
+               ON DUPLICATE KEY UPDATE 
+               is_accessed = VALUES(is_accessed), 
+               accessed_at = COALESCE(accessed_at, VALUES(accessed_at)),
+               updated_by = VALUES(updated_by)`,
+              [student.id, courseId, contentId, true, req.user!.id, req.user!.id]
+            );
+
+            // Get updated progress
+            studentProgress = await DatabaseHelpers.executeSelectOne(
+              connection,
+              `SELECT is_accessed, is_completed, accessed_at, completed_at 
+               FROM student_content_progress 
+               WHERE student_id = ? AND course_id = ? AND content_id = ?`,
+              [student.id, courseId, contentId]
+            );
+          }
+        } else if (req.user!.roles.includes('Institute Admin') && !req.user!.roles.includes('Admin')) {
+          // Institute Admin: Check if course is offered by their institution
+          const institutionCourse = await DatabaseHelpers.executeSelectOne(
+            connection,
+            `SELECT ic.id FROM institution_courses ic 
+             JOIN institutions i ON ic.institution_id = i.id 
+             WHERE i.email = ? AND ic.course_id = ? AND ic.status = 1`,
+            [req.user!.email, courseId]
+          );
+
+          if (!institutionCourse) {
+            res.status(403).json({
+              status: 'error',
+              message: 'This course is not offered by your institution'
+            });
+            return;
+          }
+        }
+        // Admins have global access (no additional checks)
+
         // Generate signed URLs for all S3 content
         await processContentSignedUrls(content);
 
@@ -1378,6 +1480,12 @@ export class CourseController {
               description: content.description,
               content_type: content.content_type,
               access_url: accessUrl,
+              progress: studentProgress ? {
+                is_accessed: studentProgress.is_accessed || false,
+                is_completed: studentProgress.is_completed || false,
+                accessed_at: studentProgress.accessed_at || null,
+                completed_at: studentProgress.completed_at || null
+              } : null,
               content_text: content.content_text,
               file_name: content.file_name,
               file_size: content.file_size ? S3Service.formatFileSize(content.file_size) : null,
@@ -1837,6 +1945,205 @@ export class CourseController {
 
     } catch (error) {
       console.error('Error updating content:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  /**
+   * Get my course progress (Students only)
+   * GET /api/courses/:courseId/my-progress
+   */
+  static async getMyProgress(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const courseId = parseInt(req.params.courseId as string);
+
+      if (!req.user!.roles.includes('Student')) {
+        res.status(403).json({
+          status: 'error',
+          message: 'Only students can view their own progress'
+        });
+        return;
+      }
+
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        
+        const student = await DatabaseHelpers.executeSelectOne(
+          connection,
+          'SELECT id FROM students WHERE user_id = ? AND status = 1',
+          [req.user!.id]
+        );
+
+        if (!student) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Student record not found'
+          });
+          return;
+        }
+
+        // Check enrollment
+        const enrollment = await DatabaseHelpers.executeSelectOne(
+          connection,
+          'SELECT id FROM student_courses WHERE student_id = ? AND course_id = ? AND status = 1',
+          [student.id, courseId]
+        );
+
+        if (!enrollment) {
+          res.status(403).json({
+            status: 'error',
+            message: 'You are not enrolled in this course'
+          });
+          return;
+        }
+
+        // Get course information
+        const course = await DatabaseHelpers.executeSelectOne(
+          connection,
+          'SELECT id, title, description FROM courses WHERE id = ? AND status = 1',
+          [courseId]
+        );
+
+        // Get detailed progress
+        const progress = await DatabaseHelpers.executeSelect(
+          connection,
+          `SELECT cc.id, cc.title, cc.content_type, cs.title as section_title,
+                  cc.sequence_number, cc.duration,
+                  scp.is_accessed, scp.is_completed, scp.accessed_at, scp.completed_at
+           FROM course_contents cc
+           JOIN course_sections cs ON cc.section_id = cs.id
+           LEFT JOIN student_content_progress scp ON cc.id = scp.content_id 
+                     AND scp.student_id = ? AND scp.course_id = ?
+           WHERE cc.course_id = ? AND cc.status = 1
+           ORDER BY cs.sort_order ASC, cc.sequence_number ASC`,
+          [student.id, courseId, courseId]
+        );
+
+        const totalContents = progress.length;
+        const accessedCount = progress.filter(p => p.is_accessed).length;
+        const completedCount = progress.filter(p => p.is_completed).length;
+
+        res.status(200).json({
+          status: 'success',
+          message: 'Your course progress retrieved successfully',
+          data: {
+            course: course,
+            progress: progress,
+            summary: {
+              total_contents: totalContents,
+              accessed_contents: accessedCount,
+              completed_contents: completedCount,
+              access_percentage: totalContents > 0 ? Math.round((accessedCount / totalContents) * 100) : 0,
+              completion_percentage: totalContents > 0 ? Math.round((completedCount / totalContents) * 100) : 0
+            }
+          }
+        });
+      });
+
+    } catch (error) {
+      console.error('Error fetching my progress:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  /**
+   * Get student progress (Admin/Institute Admin only)
+   * GET /api/courses/:courseId/students/:studentId/progress
+   */
+  static async getStudentProgress(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const courseId = parseInt(req.params.courseId as string);
+      const studentId = parseInt(req.params.studentId as string);
+
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        
+        // Institute Admin access check
+        if (req.user!.roles.includes('Institute Admin') && !req.user!.roles.includes('Admin')) {
+          const institutionCourse = await DatabaseHelpers.executeSelectOne(
+            connection,
+            `SELECT ic.id FROM institution_courses ic 
+             JOIN institutions i ON ic.institution_id = i.id 
+             WHERE i.email = ? AND ic.course_id = ? AND ic.status = 1`,
+            [req.user!.email, courseId]
+          );
+
+          if (!institutionCourse) {
+            res.status(403).json({
+              status: 'error',
+              message: 'This course is not offered by your institution'
+            });
+            return;
+          }
+        }
+
+        // Get student and course info
+        const student = await DatabaseHelpers.executeSelectOne(
+          connection,
+          `SELECT s.id, u.first_name, u.last_name, u.email 
+           FROM students s 
+           JOIN users u ON s.user_id = u.id 
+           WHERE s.id = ? AND s.status = 1`,
+          [studentId]
+        );
+
+        const course = await DatabaseHelpers.executeSelectOne(
+          connection,
+          'SELECT id, title, description FROM courses WHERE id = ? AND status = 1',
+          [courseId]
+        );
+
+        if (!student || !course) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Student or course not found'
+          });
+          return;
+        }
+
+        // Get detailed progress
+        const progress = await DatabaseHelpers.executeSelect(
+          connection,
+          `SELECT cc.id, cc.title, cc.content_type, cs.title as section_title,
+                  cc.sequence_number, cc.duration,
+                  scp.is_accessed, scp.is_completed, scp.accessed_at, scp.completed_at
+           FROM course_contents cc
+           JOIN course_sections cs ON cc.section_id = cs.id
+           LEFT JOIN student_content_progress scp ON cc.id = scp.content_id 
+                     AND scp.student_id = ? AND scp.course_id = ?
+           WHERE cc.course_id = ? AND cc.status = 1
+           ORDER BY cs.sort_order ASC, cc.sequence_number ASC`,
+          [studentId, courseId, courseId]
+        );
+
+        const totalContents = progress.length;
+        const accessedCount = progress.filter(p => p.is_accessed).length;
+        const completedCount = progress.filter(p => p.is_completed).length;
+
+        res.status(200).json({
+          status: 'success',
+          message: 'Student progress retrieved successfully',
+          data: {
+            student: student,
+            course: course,
+            progress: progress,
+            summary: {
+              total_contents: totalContents,
+              accessed_contents: accessedCount,
+              completed_contents: completedCount,
+              access_percentage: totalContents > 0 ? Math.round((accessedCount / totalContents) * 100) : 0,
+              completion_percentage: totalContents > 0 ? Math.round((completedCount / totalContents) * 100) : 0
+            }
+          }
+        });
+      });
+
+    } catch (error) {
+      console.error('Error fetching student progress:', error);
       res.status(500).json({
         status: 'error',
         message: 'Internal server error'
