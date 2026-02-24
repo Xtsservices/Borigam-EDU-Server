@@ -119,7 +119,22 @@ export class InstitutionController {
         if (existingInstitution) {
           res.status(400).json({
             status: 'error',
-            message: 'An institution with this email already exists'
+            message: 'Email address is already in use by another institution'
+          });
+          return;
+        }
+
+        // Check if institution phone already exists
+        const existingPhone = await DatabaseHelpers.executeSelectOne(
+          connection,
+          InstitutionQueries.checkPhoneExists,
+          [phone]
+        );
+
+        if (existingPhone) {
+          res.status(400).json({
+            status: 'error',
+            message: 'Phone number is already in use by another institution'
           });
           return;
         }
@@ -134,7 +149,22 @@ export class InstitutionController {
         if (existingUser) {
           res.status(400).json({
             status: 'error',
-            message: 'A user with this email already exists'
+            message: 'Email address is already in use by another user'
+          });
+          return;
+        }
+
+        // Check if user with this phone already exists
+        const existingUserPhone = await DatabaseHelpers.executeSelectOne(
+          connection,
+          UserQueries.checkPhoneExists,
+          [phone]
+        );
+
+        if (existingUserPhone) {
+          res.status(400).json({
+            status: 'error',
+            message: 'Phone number is already in use by another user'
           });
           return;
         }
@@ -304,39 +334,19 @@ export class InstitutionController {
         return;
       }
 
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 10;
-      const offset = (page - 1) * limit;
-
       await DatabaseTransaction.executeTransaction(async (connection) => {
         
-        // Get institutions with pagination
+        // Get all institutions
         const institutions = await DatabaseHelpers.executeSelect(
           connection,
-          InstitutionQueries.getAllInstitutions,
-          [limit, offset]
-        );
-
-        // Get total count
-        const countResult = await DatabaseHelpers.executeSelectOne(
-          connection,
-          InstitutionQueries.getInstitutionCount,
+          InstitutionQueries.getAllInstitutionsBase,
           []
         );
-
-        const totalCount = countResult?.count || 0;
-        const totalPages = Math.ceil(totalCount / limit);
 
         res.status(200).json({
           status: 'success',
           data: {
-            institutions,
-            pagination: {
-              current_page: page,
-              total_pages: totalPages,
-              total_count: totalCount,
-              limit
-            }
+            institutions
           }
         });
       });
@@ -493,7 +503,7 @@ export class InstitutionController {
           if (existingInstitution) {
             res.status(400).json({
               status: 'error',
-              message: 'An institution with this email already exists'
+              message: 'Email address is already in use by another institution'
             });
             return;
           }
@@ -508,7 +518,39 @@ export class InstitutionController {
           if (existingUser && existingUser.email !== institution.email) {
             res.status(400).json({
               status: 'error',
-              message: 'A user with this email already exists'
+              message: 'Email address is already in use by another user'
+            });
+            return;
+          }
+        }
+
+        // Check if new phone already exists (if phone is being updated)
+        if (phone && phone !== institution.phone) {
+          const existingInstitution = await DatabaseHelpers.executeSelectOne(
+            connection,
+            InstitutionQueries.checkPhoneExists,
+            [phone]
+          );
+
+          if (existingInstitution) {
+            res.status(400).json({
+              status: 'error',
+              message: 'Phone number is already in use by another institution'
+            });
+            return;
+          }
+
+          // Also check if user exists with this phone
+          const existingUser = await DatabaseHelpers.executeSelectOne(
+            connection,
+            UserQueries.checkPhoneExists,
+            [phone]
+          );
+
+          if (existingUser) {
+            res.status(400).json({
+              status: 'error',
+              message: 'Phone number is already in use by another user'
             });
             return;
           }

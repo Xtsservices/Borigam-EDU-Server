@@ -162,7 +162,22 @@ export class StudentController {
         if (existingStudent) {
           res.status(400).json({
             status: 'error',
-            message: 'A student with this email already exists'
+            message: 'Email address is already in use by another student'
+          });
+          return;
+        }
+
+        // Check if student mobile already exists
+        const existingMobile = await DatabaseHelpers.executeSelectOne(
+          connection,
+          StudentQueries.checkMobileExists,
+          [mobile]
+        );
+
+        if (existingMobile) {
+          res.status(400).json({
+            status: 'error',
+            message: 'Mobile number is already in use by another student'
           });
           return;
         }
@@ -177,7 +192,22 @@ export class StudentController {
         if (existingUser) {
           res.status(400).json({
             status: 'error',
-            message: 'A user with this email already exists'
+            message: 'Email address is already in use by another user'
+          });
+          return;
+        }
+
+        // Check if user with this mobile already exists
+        const existingUserMobile = await DatabaseHelpers.executeSelectOne(
+          connection,
+          UserQueries.checkPhoneExists,
+          [mobile]
+        );
+
+        if (existingUserMobile) {
+          res.status(400).json({
+            status: 'error',
+            message: 'Mobile number is already in use by another user'
           });
           return;
         }
@@ -430,7 +460,22 @@ export class StudentController {
         if (existingStudent) {
           res.status(400).json({
             status: 'error',
-            message: 'A student with this email already exists'
+            message: 'Email address is already in use by another student'
+          });
+          return;
+        }
+
+        // Check if student mobile already exists
+        const existingMobile = await DatabaseHelpers.executeSelectOne(
+          connection,
+          StudentQueries.checkMobileExists,
+          [mobile]
+        );
+
+        if (existingMobile) {
+          res.status(400).json({
+            status: 'error',
+            message: 'Mobile number is already in use by another student'
           });
           return;
         }
@@ -445,7 +490,22 @@ export class StudentController {
         if (existingUser) {
           res.status(400).json({
             status: 'error',
-            message: 'A user with this email already exists'
+            message: 'Email address is already in use by another user'
+          });
+          return;
+        }
+
+        // Check if user with this mobile already exists
+        const existingUserMobile = await DatabaseHelpers.executeSelectOne(
+          connection,
+          UserQueries.checkPhoneExists,
+          [mobile]
+        );
+
+        if (existingUserMobile) {
+          res.status(400).json({
+            status: 'error',
+            message: 'Mobile number is already in use by another user'
           });
           return;
         }
@@ -632,39 +692,19 @@ export class StudentController {
         return;
       }
 
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 10;
-      const offset = (page - 1) * limit;
-
       await DatabaseTransaction.executeTransaction(async (connection) => {
         
-        // Get students with pagination
+        // Get all students
         const students = await DatabaseHelpers.executeSelect(
           connection,
-          StudentQueries.getAllStudents,
-          [limit, offset]
-        );
-
-        // Get total count
-        const countResult = await DatabaseHelpers.executeSelectOne(
-          connection,
-          StudentQueries.getStudentCount,
+          StudentQueries.getAllStudentsBase,
           []
         );
-
-        const totalCount = countResult?.count || 0;
-        const totalPages = Math.ceil(totalCount / limit);
 
         res.status(200).json({
           status: 'success',
           data: {
-            students,
-            pagination: {
-              current_page: page,
-              total_pages: totalPages,
-              total_count: totalCount,
-              limit
-            }
+            students
           }
         });
       });
@@ -690,9 +730,6 @@ export class StudentController {
       }
 
       const institutionId = parseInt(req.params.id as string);
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 10;
-      const offset = (page - 1) * limit;
 
       // Validate institution ID
       const validation = validateData({ id: institutionId }, Joi.object({ id: studentValidation.institutionId }));
@@ -720,34 +757,18 @@ export class StudentController {
           }
         }
 
-        // Get students by institution with pagination
+        // Get all students by institution
         const students = await DatabaseHelpers.executeSelect(
           connection,
-          InstituteStudentsQueries.getStudentsByInstitution,
-          [institutionId, limit, offset]
-        );
-
-        // Get total count
-        const countResult = await DatabaseHelpers.executeSelectOne(
-          connection,
-          InstituteStudentsQueries.getStudentsByInstitutionCount,
+          InstituteStudentsQueries.getInstitutionStudents,
           [institutionId]
         );
-
-        const totalCount = countResult?.count || 0;
-        const totalPages = Math.ceil(totalCount / limit);
 
         res.status(200).json({
           status: 'success',
           data: {
             students,
-            institution_id: institutionId,
-            pagination: {
-              current_page: page,
-              total_pages: totalPages,
-              total_count: totalCount,
-              limit
-            }
+            institution_id: institutionId
           }
         });
       });
@@ -1077,10 +1098,6 @@ export class InstituteAdminController {
         return;
       }
 
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 10;
-      const offset = (page - 1) * limit;
-
       // Get database connection
       const db = await import("../../db");
       const connection = await db.default.getConnection();
@@ -1101,17 +1118,36 @@ export class InstituteAdminController {
         return;
       }
 
-        // Get students with progress
+        // Get all students with progress (without pagination)
+        const getStudentsWithProgressQuery = `
+          SELECT 
+            s.id as student_id,
+            s.first_name,
+            s.last_name,
+            s.email,
+            s.mobile,
+            s.created_at as student_created_at,
+            c.id as course_id,
+            c.title as course_title,
+            sc.enrollment_date,
+            sc.progress,
+            sc.completion_date,
+            CASE 
+              WHEN sc.progress = 100 THEN 'Completed'
+              WHEN sc.progress > 0 THEN 'In Progress'
+              ELSE 'Not Started'
+            END as status
+          FROM institute_students ins
+          JOIN students s ON ins.student_id = s.id AND s.status = 1
+          LEFT JOIN student_courses sc ON s.id = sc.student_id AND sc.status = 1
+          LEFT JOIN courses c ON sc.course_id = c.id AND c.status = 1
+          WHERE ins.institution_id = ? AND ins.status = 1
+          ORDER BY s.first_name, s.last_name, c.title
+        `;
+
         const studentsWithProgress = await DatabaseHelpers.executeSelect(
           connection,
-          AdminDashboardQueries.getInstituteStudentsWithProgress,
-          [institution.id, limit, offset]
-        );
-
-        // Get total count for pagination
-        const totalCount = await DatabaseHelpers.executeSelectOne(
-          connection,
-          AdminDashboardQueries.getInstituteStudentsCount,
+          getStudentsWithProgressQuery,
           [institution.id]
         );
 
@@ -1150,13 +1186,7 @@ export class InstituteAdminController {
         res.status(200).json({
           status: 'success',
           data: {
-            students,
-            pagination: {
-              current_page: page,
-              total_pages: Math.ceil((totalCount?.count || 0) / limit),
-              total_students: totalCount?.count || 0,
-              per_page: limit
-            }
+            students
           }
         });
       } finally {

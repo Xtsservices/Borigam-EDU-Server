@@ -147,7 +147,7 @@ export class UserController {
         if (existingUser) {
           res.status(400).json({
             status: 'error',
-            message: 'Email already exists'
+            message: 'Email address is already in use by another user'
           });
           return;
         }
@@ -163,7 +163,7 @@ export class UserController {
           if (existingPhone) {
             res.status(400).json({
               status: 'error',
-              message: 'Phone number already exists'
+              message: 'Phone number is already in use by another user'
             });
             return;
           }
@@ -471,7 +471,7 @@ export class UserController {
           if (emailExists) {
             res.status(400).json({
               status: 'error',
-              message: 'Email already exists'
+              message: 'Email address is already in use by another user'
             });
             return;
           }
@@ -488,7 +488,7 @@ export class UserController {
           if (phoneExists) {
             res.status(400).json({
               status: 'error',
-              message: 'Phone number already exists'
+              message: 'Phone number is already in use by another user'
             });
             return;
           }

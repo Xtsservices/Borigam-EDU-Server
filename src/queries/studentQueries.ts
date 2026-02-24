@@ -54,6 +54,10 @@ export class StudentQueries {
     SELECT id FROM students WHERE email = ?
   `;
 
+  static readonly checkMobileExists = `
+    SELECT id FROM students WHERE mobile = ?
+  `;
+
   static readonly getStudentCount = `
     SELECT COUNT(*) as count FROM students WHERE status = 1
   `;

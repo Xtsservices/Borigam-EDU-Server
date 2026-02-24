@@ -48,6 +48,10 @@ export class InstitutionQueries {
     SELECT id FROM institutions WHERE email = ?
   `;
 
+  static readonly checkPhoneExists = `
+    SELECT id FROM institutions WHERE phone = ?
+  `;
+
   // Get institution with courses
   static readonly getInstitutionWithCourses = `
     SELECT 
