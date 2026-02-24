@@ -341,9 +341,9 @@ export class StudentController {
 
         // Step 7: Enroll student in courses
         for (const courseId of course_ids) {
-          await DatabaseHelpers.executeInsert(
+          await DatabaseHelpers.executeQuery(
             connection,
-            StudentCoursesQueries.enrollStudentInCourse,
+            StudentCoursesQueries.upsertStudentCourse,
             [studentId, courseId, req.user!.id, req.user!.id]
           );
         }
@@ -624,9 +624,9 @@ export class StudentController {
 
         // Step 7: Enroll student in courses
         for (const courseId of course_ids) {
-          await DatabaseHelpers.executeInsert(
+          await DatabaseHelpers.executeQuery(
             connection,
-            StudentCoursesQueries.enrollStudentInCourse,
+            StudentCoursesQueries.upsertStudentCourse,
             [studentId, courseId, req.user!.id, req.user!.id]
           );
         }

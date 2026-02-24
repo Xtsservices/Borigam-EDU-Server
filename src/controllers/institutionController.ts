@@ -264,9 +264,9 @@ export class InstitutionController {
 
         // Step 6: Assign courses to institution
         for (const courseId of course_ids) {
-          await DatabaseHelpers.executeInsert(
+          await DatabaseHelpers.executeQuery(
             connection,
-            InstitutionCoursesQueries.addCourseToInstitution,
+            InstitutionCoursesQueries.upsertCourseToInstitution,
             [institutionId, courseId, req.user!.id, req.user!.id]
           );
         }
@@ -336,17 +336,60 @@ export class InstitutionController {
 
       await DatabaseTransaction.executeTransaction(async (connection) => {
         
-        // Get all institutions
-        const institutions = await DatabaseHelpers.executeSelect(
+        // Get all institutions with their courses
+        const institutionData = await DatabaseHelpers.executeSelect(
           connection,
-          InstitutionQueries.getAllInstitutionsBase,
+          InstitutionQueries.getAllInstitutionsWithCourses,
           []
         );
+
+        // Group courses by institution
+        const institutionsMap = new Map();
+
+        institutionData.forEach((row: any) => {
+          const institutionId = row.institution_id;
+          
+          if (!institutionsMap.has(institutionId)) {
+            institutionsMap.set(institutionId, {
+              id: row.institution_id,
+              name: row.institution_name,
+              email: row.email,
+              phone: row.phone,
+              address: row.address,
+              status: row.status,
+              created_by: row.created_by,
+              updated_by: row.updated_by,
+              created_at: row.institution_created_at,
+              updated_at: row.institution_updated_at,
+              courses: [],
+              total_courses: 0
+            });
+          }
+
+          // Add course data if course exists
+          if (row.course_id) {
+            const institution = institutionsMap.get(institutionId);
+            institution.courses.push({
+              id: row.course_id,
+              title: row.course_title,
+              description: row.course_description,
+              course_image: row.course_image,
+              duration: row.duration,
+              category_name: row.category_name,
+              added_at: row.course_added_at
+            });
+            institution.total_courses = institution.courses.length;
+          }
+        });
+
+        // Convert map to array
+        const institutions = Array.from(institutionsMap.values());
 
         res.status(200).json({
           status: 'success',
           data: {
-            institutions
+            institutions,
+            total_institutions: institutions.length
           }
         });
       });
@@ -812,11 +855,11 @@ export class InstitutionController {
           [req.user!.id, institutionId]
         );
 
-        // Add new course associations
+        // Add new course associations using upsert to handle previously soft-deleted records
         for (const courseId of course_ids) {
-          await DatabaseHelpers.executeInsert(
+          await DatabaseHelpers.executeQuery(
             connection,
-            InstitutionCoursesQueries.addCourseToInstitution,
+            InstitutionCoursesQueries.upsertCourseToInstitution,
             [institutionId, courseId, req.user!.id, req.user!.id]
           );
         }
@@ -919,7 +962,7 @@ export class InstitutionController {
           return;
         }
 
-        // Check if course is already assigned
+        // Check if course is already assigned (active status)
         const existingAssignment = await DatabaseHelpers.executeSelectOne(
           connection,
           InstitutionCoursesQueries.checkCourseAssignment,
@@ -934,10 +977,10 @@ export class InstitutionController {
           return;
         }
 
-        // Add course to institution
-        await DatabaseHelpers.executeInsert(
+        // Add or reactivate course assignment using upsert
+        await DatabaseHelpers.executeQuery(
           connection,
-          InstitutionCoursesQueries.addCourseToInstitution,
+          InstitutionCoursesQueries.upsertCourseToInstitution,
           [institutionId, course_id, req.user!.id, req.user!.id]
         );
 
