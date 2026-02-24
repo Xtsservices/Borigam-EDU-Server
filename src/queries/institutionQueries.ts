@@ -71,6 +71,34 @@ export class InstitutionQueries {
   static readonly getInstitutionCount = `
     SELECT COUNT(*) as count FROM institutions WHERE status = 1
   `;
+
+  // Get all institutions with course details
+  static readonly getAllInstitutionsWithCourses = `
+    SELECT 
+      i.id as institution_id, 
+      i.name as institution_name, 
+      i.email, 
+      i.phone, 
+      i.address,
+      i.status,
+      i.created_by,
+      i.updated_by,
+      i.created_at as institution_created_at,
+      i.updated_at as institution_updated_at,
+      c.id as course_id, 
+      c.title as course_title, 
+      c.description as course_description,
+      c.course_image,
+      c.duration,
+      cc.name as category_name,
+      ic.created_at as course_added_at
+    FROM institutions i
+    LEFT JOIN institution_courses ic ON i.id = ic.institution_id AND ic.status = 1
+    LEFT JOIN courses c ON ic.course_id = c.id AND c.status = 1
+    LEFT JOIN course_categories cc ON c.category_id = cc.id
+    WHERE i.status = 1
+    ORDER BY i.created_at DESC, ic.created_at DESC
+  `;
 }
 
 // Institution Courses CRUD operations
@@ -79,6 +107,26 @@ export class InstitutionCoursesQueries {
   static readonly addCourseToInstitution = `
     INSERT INTO institution_courses (institution_id, course_id, created_by, updated_by)
     VALUES (?, ?, ?, ?)
+  `;
+
+  static readonly upsertCourseToInstitution = `
+    INSERT INTO institution_courses (institution_id, course_id, created_by, updated_by)
+    VALUES (?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE 
+      status = 1, 
+      updated_by = VALUES(updated_by), 
+      updated_at = CURRENT_TIMESTAMP
+  `;
+
+  static readonly checkExistingCourseAssignment = `
+    SELECT id, status FROM institution_courses 
+    WHERE institution_id = ? AND course_id = ?
+  `;
+
+  static readonly reactivateCourseAssignment = `
+    UPDATE institution_courses 
+    SET status = 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE institution_id = ? AND course_id = ?
   `;
 
   static readonly removeCourseFromInstitution = `

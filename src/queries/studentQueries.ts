@@ -150,6 +150,15 @@ export class StudentCoursesQueries {
     VALUES (?, ?, ?, ?)
   `;
 
+  static readonly upsertStudentCourse = `
+    INSERT INTO student_courses (student_id, course_id, created_by, updated_by)
+    VALUES (?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE 
+      status = 1, 
+      updated_by = VALUES(updated_by), 
+      updated_at = CURRENT_TIMESTAMP
+  `;
+
   static readonly unenrollStudentFromCourse = `
     UPDATE student_courses 
     SET status = 0, updated_by = ? 
