@@ -305,15 +305,11 @@ export class CourseController {
    */
   static async getAllCourses(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 10;
-      const offset = (page - 1) * limit;
-
       await DatabaseTransaction.executeTransaction(async (connection) => {
         
         const courses = await DatabaseHelpers.executeSelect(
           connection,
-          CourseQueries.getAllCoursesBase + ` LIMIT ${limit} OFFSET ${offset}`,
+          CourseQueries.getAllCoursesBase,
           []
         );
 
@@ -336,24 +332,11 @@ export class CourseController {
           await processCourseImageSignedUrl(course);
         }
 
-        // Get total count
-        const totalResult = await DatabaseHelpers.executeSelectOne(
-          connection,
-          CourseQueries.getCourseCount,
-          []
-        );
-
         res.status(200).json({
           status: 'success',
           message: 'Courses retrieved successfully',
           data: {
-            courses,
-            pagination: {
-              current_page: page,
-              limit,
-              total_courses: totalResult.total,
-              total_pages: Math.ceil(totalResult.total / limit)
-            }
+            courses
           }
         });
       });

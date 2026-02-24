@@ -3,6 +3,8 @@ import authRoutes from './authRoutes';
 import userRoutes from './userRoutes';
 import roleRoutes from './roleRoutes';
 import courseRoutes from './courseRoutes';
+import institutionRoutes from './institutionRoutes';
+import studentRoutes from './studentRoutes';
 
 const router = Router();
 
@@ -32,6 +34,12 @@ router.use('/roles', roleRoutes);
 
 // Course management routes
 router.use('/courses', courseRoutes);
+
+// Institution management routes
+router.use('/institutions', institutionRoutes);
+
+// Student management routes
+router.use('/students', studentRoutes);
 
 // 404 handler for API routes
 router.use('/*', (req, res) => {

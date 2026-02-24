@@ -173,4 +173,64 @@ export class LoginHistoryQueries {
     SET password_hash = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
     WHERE user_id = ?
   `;
+
+  // Get institution by admin user email for Institute Admin profile
+  static getInstitutionByAdminEmail = `
+    SELECT i.id, i.name, i.email, i.phone, i.address, i.status,
+           i.created_at, i.updated_at
+    FROM institutions i
+    WHERE i.email = ? AND i.status = 1
+  `;
+
+  // Get institution courses for Institute Admin profile (simplified - names only)
+  static getInstitutionCoursesByEmail = `
+    SELECT c.id, c.title
+    FROM institutions i
+    JOIN institution_courses ic ON i.id = ic.institution_id
+    JOIN courses c ON ic.course_id = c.id
+    WHERE i.email = ? AND i.status = 1 AND ic.status = 1 AND c.status = 1
+    ORDER BY c.title
+  `;
+
+  // Get students count by institution for Institute Admin profile
+  static getStudentsCountByInstitutionEmail = `
+    SELECT COUNT(DISTINCT s.id) as student_count
+    FROM institutions i
+    JOIN institute_students ins ON i.id = ins.institution_id
+    JOIN students s ON ins.student_id = s.id
+    WHERE i.email = ? AND i.status = 1 AND ins.status = 1 AND s.status = 1
+  `;
+
+  // Get student profile by user email
+  static getStudentByEmail = `
+    SELECT s.id, s.first_name, s.last_name, s.email, s.mobile,
+           s.status, s.created_at, s.updated_at
+    FROM students s
+    WHERE s.email = ? AND s.status = 1
+  `;
+
+  // Get student's institution details
+  static getStudentInstitution = `
+    SELECT i.id, i.name, i.email, i.phone, i.address
+    FROM students s
+    JOIN institute_students ins ON s.id = ins.student_id
+    JOIN institutions i ON ins.institution_id = i.id
+    WHERE s.email = ? AND s.status = 1 AND ins.status = 1 AND i.status = 1
+  `;
+
+  // Get student enrolled courses
+  static getStudentCourses = `
+    SELECT c.id, c.title, c.description, c.duration, c.levels,
+           cc.name as category_name, sc.enrollment_date,
+           COALESCE(sp.progress_percentage, 0) as progress_percentage,
+           COALESCE(sp.completed_contents, 0) as completed_contents,
+           (SELECT COUNT(*) FROM course_contents WHERE course_id = c.id AND status = 1) as total_contents
+    FROM students s
+    JOIN student_courses sc ON s.id = sc.student_id
+    JOIN courses c ON sc.course_id = c.id
+    LEFT JOIN course_categories cc ON c.category_id = cc.id
+    LEFT JOIN student_progress sp ON s.id = sp.student_id AND c.id = sp.course_id
+    WHERE s.email = ? AND s.status = 1 AND sc.status = 1 AND c.status = 1
+    ORDER BY sc.enrollment_date DESC
+  `;
 }

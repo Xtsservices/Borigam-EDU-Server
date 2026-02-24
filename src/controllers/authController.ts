@@ -232,6 +232,176 @@ export class AuthController {
   }
 
   /**
+   * Get My Complete Profile with Role-specific Data
+   * GET /api/auth/myprofile
+   */
+  static async getMyProfile(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({
+          status: 'error',
+          message: 'User not authenticated'
+        });
+        return;
+      }
+
+      // Base user profile from JWT token
+      const userProfile = {
+        id: req.user.id,
+        firstName: req.user.first_name,
+        lastName: req.user.last_name,
+        email: req.user.email,
+        roles: req.user.roles
+      };
+
+      let profileData: any = {
+        user: userProfile
+      };
+
+      // Role-specific data - using simpler queries without complex joins
+      if (req.user.roles.includes('Institute Admin')) {
+        try {
+          await DatabaseTransaction.executeTransaction(async (connection) => {
+            // Get institution by admin email - simple approach
+            const institution = await DatabaseHelpers.executeSelectOne(
+              connection,
+              'SELECT id, name, email, phone, address, status, created_at, updated_at FROM institutions WHERE email = ? AND status = 1',
+              [req.user!.email]
+            );
+
+            if (institution) {
+              // Get course count
+              const courseCount = await DatabaseHelpers.executeSelectOne(
+                connection,
+                'SELECT COUNT(*) as count FROM institution_courses ic JOIN institutions i ON ic.institution_id = i.id WHERE i.email = ? AND ic.status = 1',
+                [req.user!.email]
+              );
+
+              // Get student count  
+              const studentCount = await DatabaseHelpers.executeSelectOne(
+                connection,
+                'SELECT COUNT(*) as count FROM institute_students ins JOIN institutions i ON ins.institution_id = i.id WHERE i.email = ? AND ins.status = 1',
+                [req.user!.email]
+              );
+
+              // Get course names
+              const courses = await DatabaseHelpers.executeSelect(
+                connection,
+                'SELECT c.title FROM institution_courses ic JOIN institutions i ON ic.institution_id = i.id JOIN courses c ON ic.course_id = c.id WHERE i.email = ? AND ic.status = 1 AND c.status = 1',
+                [req.user!.email]
+              );
+
+              profileData.institution = {
+                id: institution.id,
+                name: institution.name,
+                email: institution.email,
+                phone: institution.phone,
+                address: institution.address,
+                status: institution.status,
+                created_at: institution.created_at,
+                updated_at: institution.updated_at,
+                totalCourses: courseCount?.count || 0,
+                totalStudents: studentCount?.count || 0,
+                courses: courses.map(course => course.title),
+                studentsCount: studentCount?.count || 0
+              };
+            }
+          });
+        } catch (instError) {
+          console.error('Institution data error:', instError);
+          // Continue without institution data
+        }
+
+      } else if (req.user.roles.includes('Student')) {
+        try {
+          await DatabaseTransaction.executeTransaction(async (connection) => {
+            // Get student details
+            const student = await DatabaseHelpers.executeSelectOne(
+              connection,
+              'SELECT id, first_name, last_name, email, mobile, status, created_at, updated_at FROM students WHERE email = ? AND status = 1',
+              [req.user!.email]
+            );
+
+            if (student) {
+              profileData.student = {
+                id: student.id,
+                firstName: student.first_name,
+                lastName: student.last_name,
+                email: student.email,
+                mobile: student.mobile,
+                status: student.status,
+                createdAt: student.created_at,
+                updatedAt: student.updated_at,
+                totalEnrolledCourses: 0,
+                institution: null,
+                courses: []
+              };
+            }
+          });
+        } catch (studentError) {
+          console.error('Student data error:', studentError);
+          // Continue without student data
+        }
+
+      } else if (req.user.roles.includes('Admin')) {
+        try {
+          await DatabaseTransaction.executeTransaction(async (connection) => {
+            // Get basic system stats
+            const totalUsers = await DatabaseHelpers.executeSelectOne(
+              connection,
+              'SELECT COUNT(*) as count FROM users WHERE status = 1',
+              []
+            );
+
+            const totalInstitutions = await DatabaseHelpers.executeSelectOne(
+              connection,
+              'SELECT COUNT(*) as count FROM institutions WHERE status = 1',
+              []
+            );
+
+            const totalStudents = await DatabaseHelpers.executeSelectOne(
+              connection,
+              'SELECT COUNT(*) as count FROM students WHERE status = 1',
+              []
+            );
+
+            const totalCourses = await DatabaseHelpers.executeSelectOne(
+              connection,
+              'SELECT COUNT(*) as count FROM courses WHERE status = 1',
+              []
+            );
+
+            profileData.admin = {
+              systemStats: {
+                totalUsers: totalUsers?.count || 0,
+                totalInstitutions: totalInstitutions?.count || 0,
+                totalStudents: totalStudents?.count || 0,
+                totalCourses: totalCourses?.count || 0
+              }
+            };
+          });
+        } catch (adminError) {
+          console.error('Admin data error:', adminError);
+          // Continue without admin stats
+        }
+      }
+
+      res.status(200).json({
+        status: 'success',
+        message: 'Complete profile retrieved successfully',
+        data: profileData
+      });
+
+    } catch (error) {
+      console.error('Get my profile error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error occurred while fetching profile'
+      });
+    }
+  }
+
+  /**
    * Change Password
    * PUT /api/auth/change-password
    */
