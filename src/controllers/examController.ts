@@ -16,6 +16,31 @@ import { CourseQueries } from '../queries/courseQueries';
 import { InstitutionStudentQueries } from '../queries/studentQueries';
 import { DatabaseTransaction, DatabaseHelpers } from '../utils/database';
 import { validateData, examValidation } from '../utils/validations';
+import { S3Service } from '../utils/s3Service';
+
+/**
+ * Helper function to generate signed URLs for exam materials
+ */
+async function processExamMaterialSignedUrls(material: any): Promise<void> {
+  const S3_BUCKET_URL = `https://${process.env.S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
+  
+  try {
+    // Process pdf_file_url (for uploaded files)
+    if (material.pdf_file_url && material.pdf_file_url.startsWith(S3_BUCKET_URL)) {
+      const fileKey = material.pdf_file_url.replace(S3_BUCKET_URL, '');
+      material.pdf_file_url = await S3Service.generateSignedUrl(fileKey, 86400); // 24 hours
+    }
+    
+    // Process content_url (for videos if stored in S3)
+    if (material.content_url && material.content_url.startsWith(S3_BUCKET_URL)) {
+      const fileKey = material.content_url.replace(S3_BUCKET_URL, '');
+      material.content_url = await S3Service.generateSignedUrl(fileKey, 86400); // 24 hours
+    }
+  } catch (error) {
+    console.error('Error generating signed URLs for exam material:', error);
+    // Continue without signed URLs if generation fails
+  }
+}
 
 /**
  * Exam Type Controller
@@ -31,6 +56,15 @@ export class ExamTypeController {
         res.status(403).json({
           status: 'error',
           message: 'Access denied. Only Admins can create exam types.'
+        });
+        return;
+      }
+
+      // Check if request body exists
+      if (!req.body) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Request body is empty. Make sure to send JSON data with Content-Type: application/json header'
         });
         return;
       }
@@ -307,6 +341,15 @@ export class ExamController {
         return;
       }
 
+      // Check if request body exists
+      if (!req.body) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Request body is empty. Make sure to send JSON data with Content-Type: application/json header'
+        });
+        return;
+      }
+
       const { course_id, exam_type_id, exam_name, duration, duration_unit, description } = req.body;
 
       // Validate input
@@ -465,6 +508,12 @@ export class ExamController {
               ExamMaterialQueries.getMaterialsBySection,
               [section.id]
             );
+            
+            // Generate signed URLs for all materials
+            for (const material of materials) {
+              await processExamMaterialSignedUrls(material);
+            }
+            
             return { ...section, materials };
           })
         );
@@ -634,6 +683,15 @@ export class ExamSectionController {
         res.status(403).json({
           status: 'error',
           message: 'Access denied. Only Admins can create exam sections.'
+        });
+        return;
+      }
+
+      // Check if request body exists
+      if (!req.body) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Request body is empty. Make sure to send JSON data with Content-Type: application/json header'
         });
         return;
       }
@@ -880,8 +938,13 @@ export class ExamSectionController {
  */
 export class ExamMaterialController {
   /**
-   * Create exam material (Admin only)
+   * Create exam material (Admin only) - Unified endpoint
+   * Handles both JSON (video URLs) and file uploads
    * POST /api/exams/materials
+   * 
+   * Usage:
+   * 1. For Video/YouTube: Send as form-data with fields: exam_section_id, material_name, material_type, video_type, content_url, duration
+   * 2. For File Upload: Send as form-data with fields: exam_section_id, material_name, material_type, file (actual file)
    */
   static async createExamMaterial(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
@@ -893,40 +956,70 @@ export class ExamMaterialController {
         return;
       }
 
-      const {
-        exam_section_id,
-        material_name,
-        material_type,
-        video_type,
-        content_url,
-        pdf_file_url,
-        duration,
-        description,
-        sort_order
-      } = req.body;
-
-      // Validate input
-      const validation = validateData(
-        {
-          exam_section_id,
-          material_name,
-          material_type,
-          video_type,
-          content_url,
-          pdf_file_url,
-          duration,
-          description
-        },
-        examValidation.createExamMaterial
-      );
-
-      if (!validation.isValid) {
+      if (!req.body) {
         res.status(400).json({
           status: 'error',
-          message: 'Validation failed',
-          errors: validation.errors
+          message: 'Request body is empty. Provide required fields.'
         });
         return;
+      }
+
+      const exam_section_id = parseInt(req.body.exam_section_id as string);
+      const material_name = req.body.material_name as string;
+      const material_type = req.body.material_type as string; // VIDEO_SOLUTION or QUESTION_PAPER
+      const video_type = req.body.video_type as string || null; // YOUTUBE or UPLOAD
+      const content_url = req.body.content_url as string || null; // For YouTube URLs
+      const duration = req.body.duration ? parseInt(req.body.duration as string) : null;
+      const description = req.body.description as string || null;
+      const sort_order = req.body.sort_order ? parseInt(req.body.sort_order as string) : null;
+      const file = req.file; // For file uploads
+
+      // Validate required fields
+      if (!exam_section_id || !material_name || !material_type) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Missing required fields: exam_section_id, material_name, material_type'
+        });
+        return;
+      }
+
+      // Validate material type
+      if (!['VIDEO_SOLUTION', 'QUESTION_PAPER'].includes(material_type)) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Invalid material_type. Use: VIDEO_SOLUTION or QUESTION_PAPER'
+        });
+        return;
+      }
+
+      // Handle VIDEO_SOLUTION (requires video_type and content_url)
+      if (material_type === 'VIDEO_SOLUTION') {
+        if (!video_type || !content_url) {
+          res.status(400).json({
+            status: 'error',
+            message: 'For VIDEO_SOLUTION, provide: video_type (YOUTUBE/UPLOAD) and content_url'
+          });
+          return;
+        }
+
+        if (!['YOUTUBE', 'UPLOAD'].includes(video_type)) {
+          res.status(400).json({
+            status: 'error',
+            message: 'Invalid video_type. Use: YOUTUBE or UPLOAD'
+          });
+          return;
+        }
+      }
+
+      // Handle QUESTION_PAPER (requires file or use form field)
+      if (material_type === 'QUESTION_PAPER') {
+        if (!file && !req.body.pdf_file_url) {
+          res.status(400).json({
+            status: 'error',
+            message: 'For QUESTION_PAPER, upload a file or provide pdf_file_url'
+          });
+          return;
+        }
       }
 
       await DatabaseTransaction.executeTransaction(async (connection) => {
@@ -956,7 +1049,39 @@ export class ExamMaterialController {
           finalSortOrder = (maxOrder?.max_order || 0) + 1;
         }
 
-        // Create material
+        let finalPdfUrl = req.body.pdf_file_url as string || null;
+        let fileSize = null;
+        let fileKey = null;
+
+        // If file is provided, upload to S3
+        if (file) {
+          // Validate file type
+          const allowedMimeTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'];
+          
+          if (!allowedMimeTypes.includes(file.mimetype)) {
+            res.status(400).json({
+              status: 'error',
+              message: 'Invalid file type. Allowed: PDF, DOC, DOCX, PPT, PPTX'
+            });
+            return;
+          }
+
+          // Upload to S3
+          const uploadResult = await S3Service.uploadFile({
+            buffer: file.buffer,
+            originalName: file.originalname,
+            mimeType: file.mimetype,
+            courseId: section.course_id || 1,
+            sectionId: exam_section_id,
+            contentType: 'EXAM_MATERIAL'
+          });
+
+          finalPdfUrl = uploadResult.url;
+          fileSize = file.size;
+          fileKey = uploadResult.key;
+        }
+
+        // Create material in database
         const result = await DatabaseHelpers.executeQuery(
           connection,
           ExamMaterialQueries.createExamMaterial,
@@ -964,11 +1089,11 @@ export class ExamMaterialController {
             exam_section_id,
             material_name,
             material_type,
-            video_type || null,
-            content_url || null,
-            pdf_file_url || null,
-            duration || null,
-            description || null,
+            material_type === 'VIDEO_SOLUTION' ? video_type : null,
+            material_type === 'VIDEO_SOLUTION' ? content_url : null,
+            material_type === 'QUESTION_PAPER' ? finalPdfUrl : null,
+            material_type === 'VIDEO_SOLUTION' ? duration : null,
+            description,
             finalSortOrder,
             1,
             req.user!.id
@@ -983,6 +1108,13 @@ export class ExamMaterialController {
             exam_section_id,
             material_name,
             material_type,
+            video_type: material_type === 'VIDEO_SOLUTION' ? video_type : null,
+            content_url: material_type === 'VIDEO_SOLUTION' ? content_url : null,
+            pdf_file_url: material_type === 'QUESTION_PAPER' ? finalPdfUrl : null,
+            duration: material_type === 'VIDEO_SOLUTION' ? duration : null,
+            description,
+            file_size: fileSize,
+            file_key: fileKey,
             sort_order: finalSortOrder
           }
         });
@@ -992,7 +1124,7 @@ export class ExamMaterialController {
       console.error('Error creating exam material:', error);
       res.status(500).json({
         status: 'error',
-        message: 'Internal server error'
+        message: 'Failed to create exam material'
       });
     }
   }
@@ -1026,6 +1158,13 @@ export class ExamMaterialController {
           ExamMaterialQueries.getMaterialsBySection,
           [parseInt(sectionId as string)]
         );
+
+        // Generate signed URLs for all materials
+        if (materials && materials.length > 0) {
+          for (const material of materials) {
+            await processExamMaterialSignedUrls(material);
+          }
+        }
 
         res.status(200).json({
           status: 'success',
@@ -1117,6 +1256,125 @@ export class ExamMaterialController {
       res.status(500).json({
         status: 'error',
         message: 'Internal server error'
+      });
+    }
+  }
+
+  /**
+   * Upload exam material file (Admin only)
+   * POST /api/exams/materials/upload/:sectionId
+   */
+  static async uploadExamMaterialFile(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user?.roles.includes('Admin')) {
+        res.status(403).json({
+          status: 'error',
+          message: 'Access denied. Only Admins can upload exam materials.'
+        });
+        return;
+      }
+
+      if (!req.file) {
+        res.status(400).json({
+          status: 'error',
+          message: 'No file provided. Please upload a file.'
+        });
+        return;
+      }
+
+      const { sectionId } = req.params;
+      const { material_name, material_type } = req.body;
+
+      // Validate inputs
+      if (!material_name || !material_type) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Material name and type are required'
+        });
+        return;
+      }
+
+      if (!['PDF', 'DOC', 'DOCX', 'PPT', 'PPTX'].includes(material_type)) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Invalid material type. Allowed types: PDF, DOC, DOCX, PPT, PPTX'
+        });
+        return;
+      }
+
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        // Check if section exists
+        const section = await DatabaseHelpers.executeSelectOne(
+          connection,
+          ExamSectionQueries.getSectionById,
+          [parseInt(sectionId as string)]
+        );
+
+        if (!section) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Exam section not found'
+          });
+          return;
+        }
+
+        // Upload file to S3
+        const uploadResult = await S3Service.uploadFile({
+          buffer: req.file!.buffer,
+          originalName: req.file!.originalname,
+          mimeType: req.file!.mimetype,
+          courseId: section.course_id || 1,
+          sectionId: parseInt(sectionId as string),
+          contentType: 'EXAM_MATERIAL'
+        });
+
+        const maxOrder = await DatabaseHelpers.executeSelectOne(
+          connection,
+          ExamMaterialQueries.getMaxSortOrderForSection,
+          [parseInt(sectionId as string)]
+        );
+        const finalSortOrder = (maxOrder?.max_order || 0) + 1;
+
+        // Create material record in database
+        const result = await DatabaseHelpers.executeQuery(
+          connection,
+          ExamMaterialQueries.createExamMaterial,
+          [
+            parseInt(sectionId as string),
+            material_name,
+            'QUESTION_PAPER',
+            null,
+            null,
+            uploadResult.url, // Store S3 URL as pdf_file_url
+            null,
+            `${material_type} file`,
+            finalSortOrder,
+            1,
+            req.user!.id
+          ]
+        );
+
+        res.status(201).json({
+          status: 'success',
+          message: 'Exam material file uploaded successfully',
+          data: {
+            id: result.insertId,
+            exam_section_id: parseInt(sectionId as string),
+            material_name,
+            material_type,
+            pdf_file_url: uploadResult.url,
+            file_size: req.file!.size,
+            file_key: uploadResult.key,
+            sort_order: finalSortOrder
+          }
+        });
+      });
+
+    } catch (error) {
+      console.error('Error uploading exam material file:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to upload exam material file'
       });
     }
   }
@@ -1278,9 +1536,12 @@ export class ExamViewController {
           [parseInt(examId as string)]
         );
 
-        // Group materials by section
+        // Group materials by section and generate signed URLs
         const sectionsMap = new Map();
-        materials.forEach((material: any) => {
+        for (const material of materials) {
+          // Generate signed URLs
+          await processExamMaterialSignedUrls(material);
+          
           if (!sectionsMap.has(material.exam_section_id)) {
             sectionsMap.set(material.exam_section_id, {
               section_name: material.section_name,
@@ -1289,7 +1550,7 @@ export class ExamViewController {
             });
           }
           sectionsMap.get(material.exam_section_id).materials.push(material);
-        });
+        }
 
         const sections = Array.from(sectionsMap.values()).sort((a: any, b: any) => a.sort_order - b.sort_order);
 
@@ -1417,9 +1678,12 @@ export class ExamViewController {
           [parseInt(examId as string)]
         );
 
-        // Group materials by section
+        // Group materials by section and generate signed URLs
         const sectionsMap = new Map();
-        materials.forEach((material: any) => {
+        for (const material of materials) {
+          // Generate signed URLs
+          await processExamMaterialSignedUrls(material);
+          
           if (!sectionsMap.has(material.exam_section_id)) {
             sectionsMap.set(material.exam_section_id, {
               section_name: material.section_name,
@@ -1428,7 +1692,7 @@ export class ExamViewController {
             });
           }
           sectionsMap.get(material.exam_section_id).materials.push(material);
-        });
+        }
 
         const sections = Array.from(sectionsMap.values()).sort((a: any, b: any) => a.sort_order - b.sort_order);
 

@@ -45,7 +45,6 @@ app.use('/api/institutions', institutionRoutes);
 app.use('/api/students', studentRoutes);
 app.use('/api/exams', examRoutes);
 
-
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.status(200).json({

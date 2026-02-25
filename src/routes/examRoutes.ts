@@ -7,6 +7,7 @@ import {
   ExamViewController
 } from '../controllers/examController';
 import { authenticateToken, adminOnly, apiRateLimit } from '../middlewares/auth';
+import { uploadMiddleware } from '../utils/uploadMiddleware';
 
 const router = Router();
 
@@ -77,8 +78,8 @@ router.delete('/sections/:id', adminOnly, ExamSectionController.deleteExamSectio
  * EXAM MATERIAL ROUTES - Admin only (create/update/delete), All can view
  */
 
-// Create exam material
-router.post('/materials', adminOnly, ExamMaterialController.createExamMaterial);
+// Create exam material - UNIFIED endpoint (handles both video URLs and file uploads)
+router.post('/materials', adminOnly, uploadMiddleware.single('file'), ExamMaterialController.createExamMaterial);
 
 // Get materials by section
 router.get('/sections/:sectionId/materials', ExamMaterialController.getMaterialsBySection);
