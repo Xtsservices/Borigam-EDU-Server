@@ -14,6 +14,7 @@ import {
   CourseContentQueries,
   CourseRatingQueries
 } from '../queries/courseQueries';
+import { InstitutionStudentQueries } from '../queries/studentQueries';
 import { DatabaseTransaction, DatabaseHelpers } from '../utils/database';
 import { S3Service } from '../utils/s3Service';
 import { FileUploadValidator, handleMulterError } from '../utils/uploadMiddleware';
@@ -307,14 +308,45 @@ export class CourseController {
     try {
       await DatabaseTransaction.executeTransaction(async (connection) => {
         
-        const courses = await DatabaseHelpers.executeSelect(
-          connection,
-          CourseQueries.getAllCoursesBase,
-          []
-        );
+        let courses: any[] = [];
+        let institutionId: number | null = null;
 
-        // Parse levels JSON for each course
-        courses.forEach(course => {
+        // Check if user is Institute Admin - filter courses by their institution
+        if (req.user?.roles.includes('Institute Admin')) {
+          const institution = await DatabaseHelpers.executeSelectOne(
+            connection,
+            InstitutionStudentQueries.getInstitutionByAdminUserId,
+            [req.user!.id]
+          );
+
+          if (!institution) {
+            res.status(404).json({
+              status: 'error',
+              message: 'Institution not found for this administrator'
+            });
+            return;
+          }
+
+          institutionId = institution.id;
+
+          // Get only courses offered by this institution
+          courses = await DatabaseHelpers.executeSelect(
+            connection,
+            CourseQueries.getCoursesByInstitution,
+            [institutionId]
+          );
+        } else {
+          // For Admin and Students, get all active courses
+          courses = await DatabaseHelpers.executeSelect(
+            connection,
+            CourseQueries.getAllCoursesBase,
+            []
+          );
+        }
+
+        // Enrich each course with sections and contents
+        for (const course of courses) {
+          // Parse levels JSON for each course
           if (course.levels) {
             try {
               course.levels = JSON.parse(course.levels);
@@ -325,18 +357,42 @@ export class CourseController {
               }
             }
           }
-        });
 
-        // Generate signed URLs for S3 course images
-        for (const course of courses) {
+          // Generate signed URL for S3 course image
           await processCourseImageSignedUrl(course);
+
+          // Get course sections and contents
+          const sections = await DatabaseHelpers.executeSelect(
+            connection,
+            CourseSectionQueries.getSectionsByCourse,
+            [course.id]
+          );
+
+          // Get contents for each section
+          for (const section of sections) {
+            section.contents = await DatabaseHelpers.executeSelect(
+              connection,
+              CourseContentQueries.getContentsBySection,
+              [section.id]
+            );
+            
+            // Generate signed URLs for all content in this section
+            for (const content of section.contents) {
+              await processContentSignedUrls(content);
+            }
+          }
+
+          course.sections = sections;
         }
 
         res.status(200).json({
           status: 'success',
           message: 'Courses retrieved successfully',
           data: {
-            courses
+            courses,
+            total_courses: courses.length,
+            filtered_by_institution: req.user?.roles.includes('Institute Admin') ? true : false,
+            institution_id: institutionId
           }
         });
       });

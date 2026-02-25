@@ -69,6 +69,16 @@ export class CourseQueries {
     WHERE JSON_CONTAINS(c.levels, ?) AND c.status = 1
     ORDER BY c.created_at DESC
   `;
+
+  // Get courses offered by a specific institution
+  static readonly getCoursesByInstitution = `
+    SELECT c.*, cat.name as category_name
+    FROM courses c
+    LEFT JOIN course_categories cat ON c.category_id = cat.id
+    JOIN institution_courses ic ON c.id = ic.course_id AND ic.status = 1
+    WHERE ic.institution_id = ? AND c.status = 1
+    ORDER BY c.created_at DESC
+  `;
 }
 
 // Course Category queries
