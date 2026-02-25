@@ -1350,7 +1350,7 @@ export class CourseController {
               title || null,
               description || null,
               S3Service.getFileTypeCategory(file.mimetype), // Use detected content type
-              uploadResult.key || null, // Store S3 key instead of full URL
+              uploadResult.url || null, // Store full S3 URL
               null, // content_text
               null, // youtube_url (not applicable for file uploads)
               FileUploadValidator.sanitizeFileName(file.originalname) || null, // sanitized file_name
