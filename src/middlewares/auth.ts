@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
 // Extend Request interface to include user
-interface AuthenticatedRequest extends Request {
+export interface AuthenticatedRequest extends Request {
   user?: {
     id: number;
     email: string;
@@ -210,6 +210,16 @@ export const selfOrAdmin = (req: AuthenticatedRequest, res: Response, next: Next
  */
 const requestCounts = new Map<string, { count: number; resetTime: number }>();
 
+// Cleanup expired entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of requestCounts.entries()) {
+    if (now > value.resetTime) {
+      requestCounts.delete(key);
+    }
+  }
+}, 5 * 60 * 1000);
+
 export const rateLimit = (maxRequests: number, windowMs: number) => {
   return (req: Request, res: Response, next: NextFunction): void => {
     try {
@@ -247,9 +257,23 @@ export const rateLimit = (maxRequests: number, windowMs: number) => {
   };
 };
 
-// Pre-configured rate limiters
-export const loginRateLimit = rateLimit(5, 15 * 60 * 1000); // 5 attempts per 15 minutes
-export const apiRateLimit = rateLimit(100, 60 * 1000); // 100 requests per minute
+/**
+ * Clear rate limit for a specific IP (call on successful login)
+ */
+export const clearRateLimit = (req: Request): void => {
+  const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+  requestCounts.delete(clientIP);
+};
+
+// Pre-configured rate limiters with environment variable support
+// Configure via environment variables: LOGIN_RATE_LIMIT_MAX, LOGIN_RATE_LIMIT_WINDOW_MINUTES, API_RATE_LIMIT_MAX, API_RATE_LIMIT_WINDOW_SECONDS
+const LOGIN_RATE_LIMIT_MAX = parseInt(process.env.LOGIN_RATE_LIMIT_MAX || '15', 10);
+const LOGIN_RATE_LIMIT_WINDOW_MS = parseInt(process.env.LOGIN_RATE_LIMIT_WINDOW_MINUTES || '15', 10) * 60 * 1000;
+const API_RATE_LIMIT_MAX = parseInt(process.env.API_RATE_LIMIT_MAX || '100', 10);
+const API_RATE_LIMIT_WINDOW_MS = parseInt(process.env.API_RATE_LIMIT_WINDOW_SECONDS || '60', 10) * 1000;
+
+export const loginRateLimit = rateLimit(LOGIN_RATE_LIMIT_MAX, LOGIN_RATE_LIMIT_WINDOW_MS); // Configurable login attempts
+export const apiRateLimit = rateLimit(API_RATE_LIMIT_MAX, API_RATE_LIMIT_WINDOW_MS); // Configurable API rate limit
 
 /**
  * Admin or Institute Admin Only Middleware

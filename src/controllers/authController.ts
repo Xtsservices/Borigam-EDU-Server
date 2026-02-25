@@ -6,6 +6,7 @@ import { loginValidation, validateData } from '../utils/validations';
 import { LoginQueries, UserQueries, RoleQueries, LoginHistoryQueries } from '../queries/userQueries';
 import { DatabaseTransaction, DatabaseHelpers } from '../utils/database';
 import { EmailService } from '../utils/emailService';
+import { clearRateLimit } from '../middlewares/auth';
 
 // Define interfaces for better type safety
 interface LoginRequest extends Request {
@@ -137,6 +138,9 @@ export class AuthController {
           LoginHistoryQueries.createLoginHistory,
           [loginDetails.id, ipAddress, userAgent]
         );
+
+        // Clear rate limit for this user on successful login
+        clearRateLimit(req);
 
         res.status(200).json({
           status: 'success',
