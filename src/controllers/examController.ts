@@ -17,29 +17,13 @@ import { InstitutionStudentQueries } from '../queries/studentQueries';
 import { DatabaseTransaction, DatabaseHelpers } from '../utils/database';
 import { validateData, examValidation } from '../utils/validations';
 import { S3Service } from '../utils/s3Service';
+import { SignedUrlHelper } from '../utils/signedUrlHelper';
 
 /**
  * Helper function to generate signed URLs for exam materials
  */
 async function processExamMaterialSignedUrls(material: any): Promise<void> {
-  const S3_BUCKET_URL = `https://${process.env.S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
-  
-  try {
-    // Process pdf_file_url (for uploaded files)
-    if (material.pdf_file_url && material.pdf_file_url.startsWith(S3_BUCKET_URL)) {
-      const fileKey = material.pdf_file_url.replace(S3_BUCKET_URL, '');
-      material.pdf_file_url = await S3Service.generateSignedUrl(fileKey, 86400); // 24 hours
-    }
-    
-    // Process content_url (for videos if stored in S3)
-    if (material.content_url && material.content_url.startsWith(S3_BUCKET_URL)) {
-      const fileKey = material.content_url.replace(S3_BUCKET_URL, '');
-      material.content_url = await S3Service.generateSignedUrl(fileKey, 86400); // 24 hours
-    }
-  } catch (error) {
-    console.error('Error generating signed URLs for exam material:', error);
-    // Continue without signed URLs if generation fails
-  }
+  await SignedUrlHelper.processExamMaterialSignedUrls(material);
 }
 
 /**

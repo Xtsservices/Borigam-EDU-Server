@@ -18,50 +18,15 @@ import { InstitutionStudentQueries } from '../queries/studentQueries';
 import { DatabaseTransaction, DatabaseHelpers } from '../utils/database';
 import { S3Service } from '../utils/s3Service';
 import { FileUploadValidator, handleMulterError } from '../utils/uploadMiddleware';
+import { SignedUrlHelper } from '../utils/signedUrlHelper';
 
-// Helper function to generate signed URLs for content
+// Legacy compatibility wrappers - now use SignedUrlHelper
 async function processContentSignedUrls(content: any): Promise<void> {
-  const S3_BUCKET_URL = `https://${process.env.S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
-  
-  try {
-    // Process content_url (for files)
-    if (content.content_url && content.content_url.startsWith(S3_BUCKET_URL)) {
-      const fileKey = content.content_url.replace(S3_BUCKET_URL, '');
-      content.content_url = await S3Service.generateSignedUrl(fileKey, 86400); // 24 hours
-    }
-    
-    // Process content_text (for embedded S3 URLs in text)
-    if (content.content_text && typeof content.content_text === 'string') {
-      const s3UrlRegex = new RegExp(`${S3_BUCKET_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\s"'<>]+`, 'g');
-      const matches = content.content_text.match(s3UrlRegex);
-      
-      if (matches) {
-        for (const match of matches) {
-          const fileKey = match.replace(S3_BUCKET_URL, '');
-          const signedUrl = await S3Service.generateSignedUrl(fileKey, 86400);
-          content.content_text = content.content_text.replace(match, signedUrl);
-        }
-      }
-    }
-  } catch (error) {
-    console.error('Error generating signed URLs for content:', error);
-    // Continue without signed URLs if generation fails
-  }
+  await SignedUrlHelper.processContentSignedUrls(content);
 }
 
-// Helper function to generate signed URLs for course images
 async function processCourseImageSignedUrl(course: any): Promise<void> {
-  const S3_BUCKET_URL = `https://${process.env.S3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
-  
-  try {
-    if (course.course_image && course.course_image.startsWith(S3_BUCKET_URL)) {
-      const fileKey = course.course_image.replace(S3_BUCKET_URL, '');
-      course.course_image = await S3Service.generateSignedUrl(fileKey, 86400); // 24 hours
-    }
-  } catch (error) {
-    console.error('Error generating signed URL for course image:', error);
-    // Keep original URL if signed URL generation fails
-  }
+  await SignedUrlHelper.processCourseImageSignedUrl(course);
 }
 
 // Define interfaces for better type safety
@@ -949,6 +914,20 @@ export class CourseController {
           CourseSectionQueries.getSectionsByCourse,
           [courseId]
         );
+
+        // Get contents for each section and process signed URLs
+        for (const section of sections) {
+          section.contents = await DatabaseHelpers.executeSelect(
+            connection,
+            CourseContentQueries.getContentsBySection,
+            [section.id]
+          );
+          
+          // Generate signed URLs for all content in this section
+          for (const content of section.contents) {
+            await SignedUrlHelper.processContentSignedUrls(content);
+          }
+        }
 
         res.status(200).json({
           status: 'success',
