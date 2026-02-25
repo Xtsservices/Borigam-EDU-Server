@@ -355,6 +355,88 @@ export async function initializeDatabase(): Promise<void> {
             );
         `);
 
+        // Exam Types - Created by Admin
+        await connection.query(`
+            CREATE TABLE IF NOT EXISTS exam_types (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(100) NOT NULL UNIQUE,
+                description TEXT,
+                status SMALLINT DEFAULT 1,
+                created_by BIGINT NOT NULL,
+                updated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                FOREIGN KEY (updated_by) REFERENCES users(id)
+            );
+        `);
+
+        // Exams - Created by Admin for specific courses
+        await connection.query(`
+            CREATE TABLE IF NOT EXISTS exams (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                course_id BIGINT NOT NULL,
+                exam_type_id BIGINT NOT NULL,
+                exam_name VARCHAR(255) NOT NULL,
+                duration INT NOT NULL,
+                duration_unit ENUM('MINUTES', 'HOURS') DEFAULT 'MINUTES',
+                description TEXT,
+                status SMALLINT DEFAULT 1,
+                created_by BIGINT NOT NULL,
+                updated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_exam_per_course (course_id, exam_name),
+                FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+                FOREIGN KEY (exam_type_id) REFERENCES exam_types(id),
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                FOREIGN KEY (updated_by) REFERENCES users(id)
+            );
+        `);
+
+        // Exam Sections - Admin adds sections to exam
+        await connection.query(`
+            CREATE TABLE IF NOT EXISTS exam_sections (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                exam_id BIGINT NOT NULL,
+                section_name VARCHAR(255) NOT NULL,
+                description TEXT,
+                sort_order INT DEFAULT 0,
+                status SMALLINT DEFAULT 1,
+                created_by BIGINT NOT NULL,
+                updated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (exam_id) REFERENCES exams(id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                FOREIGN KEY (updated_by) REFERENCES users(id)
+            );
+        `);
+
+        // Exam Materials - Video solutions or Question papers
+        await connection.query(`
+            CREATE TABLE IF NOT EXISTS exam_materials (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                exam_section_id BIGINT NOT NULL,
+                material_name VARCHAR(255) NOT NULL,
+                material_type ENUM('VIDEO_SOLUTION', 'QUESTION_PAPER') NOT NULL,
+                video_type ENUM('UPLOAD', 'YOUTUBE') NULL,
+                content_url TEXT NULL,
+                pdf_file_url TEXT NULL,
+                duration INT NULL,
+                description TEXT,
+                sort_order INT DEFAULT 0,
+                status SMALLINT DEFAULT 1,
+                created_by BIGINT NOT NULL,
+                updated_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                FOREIGN KEY (exam_section_id) REFERENCES exam_sections(id) ON DELETE CASCADE,
+                FOREIGN KEY (created_by) REFERENCES users(id),
+                FOREIGN KEY (updated_by) REFERENCES users(id)
+            );
+        `);
+
         // Insert static roles if they don't exist
         const roles = [
             { name: 'Admin', description: 'System administrator with full access' },

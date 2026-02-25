@@ -500,3 +500,134 @@ export const studentValidation = {
     'any.required': 'Institution ID is required'
   })
 };
+
+// Exam validation schemas
+export const examValidation = {
+  // Create exam type
+  createExamType: Joi.object({
+    name: Joi.string().min(3).max(100).required().messages({
+      'string.min': 'Exam type name must be at least 3 characters',
+      'string.max': 'Exam type name cannot exceed 100 characters',
+      'any.required': 'Exam type name is required'
+    }),
+    description: Joi.string().max(500).optional().messages({
+      'string.max': 'Description cannot exceed 500 characters'
+    })
+  }),
+
+  // Create exam
+  createExam: Joi.object({
+    course_id: Joi.number().integer().positive().required().messages({
+      'number.positive': 'Course ID must be a positive integer',
+      'any.required': 'Course ID is required'
+    }),
+    exam_type_id: Joi.number().integer().positive().required().messages({
+      'number.positive': 'Exam type ID must be a positive integer',
+      'any.required': 'Exam type ID is required'
+    }),
+    exam_name: Joi.string().min(3).max(255).required().messages({
+      'string.min': 'Exam name must be at least 3 characters',
+      'string.max': 'Exam name cannot exceed 255 characters',
+      'any.required': 'Exam name is required'
+    }),
+    duration: Joi.number().integer().positive().required().messages({
+      'number.positive': 'Duration must be a positive number',
+      'any.required': 'Duration is required'
+    }),
+    duration_unit: Joi.string().valid('MINUTES', 'HOURS').default('MINUTES').messages({
+      'any.only': 'Duration unit must be either MINUTES or HOURS'
+    }),
+    description: Joi.string().max(500).optional().messages({
+      'string.max': 'Description cannot exceed 500 characters'
+    })
+  }),
+
+  // Update exam
+  updateExam: Joi.object({
+    exam_type_id: Joi.number().integer().positive().optional().messages({
+      'number.positive': 'Exam type ID must be a positive integer'
+    }),
+    exam_name: Joi.string().min(3).max(255).optional().messages({
+      'string.min': 'Exam name must be at least 3 characters',
+      'string.max': 'Exam name cannot exceed 255 characters'
+    }),
+    duration: Joi.number().integer().positive().optional().messages({
+      'number.positive': 'Duration must be a positive number'
+    }),
+    duration_unit: Joi.string().valid('MINUTES', 'HOURS').optional().messages({
+      'any.only': 'Duration unit must be either MINUTES or HOURS'
+    }),
+    description: Joi.string().max(500).optional().messages({
+      'string.max': 'Description cannot exceed 500 characters'
+    })
+  }),
+
+  // Create exam section
+  createExamSection: Joi.object({
+    exam_id: Joi.number().integer().positive().required().messages({
+      'number.positive': 'Exam ID must be a positive integer',
+      'any.required': 'Exam ID is required'
+    }),
+    section_name: Joi.string().min(2).max(255).required().messages({
+      'string.min': 'Section name must be at least 2 characters',
+      'string.max': 'Section name cannot exceed 255 characters',
+      'any.required': 'Section name is required'
+    }),
+    description: Joi.string().max(500).optional().messages({
+      'string.max': 'Description cannot exceed 500 characters'
+    }),
+    sort_order: Joi.number().integer().min(0).optional().messages({
+      'number.min': 'Sort order cannot be negative'
+    })
+  }),
+
+  // Create exam material
+  createExamMaterial: Joi.object({
+    exam_section_id: Joi.number().integer().positive().required().messages({
+      'number.positive': 'Exam section ID must be a positive integer',
+      'any.required': 'Exam section ID is required'
+    }),
+    material_name: Joi.string().min(2).max(255).required().messages({
+      'string.min': 'Material name must be at least 2 characters',
+      'string.max': 'Material name cannot exceed 255 characters',
+      'any.required': 'Material name is required'
+    }),
+    material_type: Joi.string().valid('VIDEO_SOLUTION', 'QUESTION_PAPER').required().messages({
+      'any.only': 'Material type must be either VIDEO_SOLUTION or QUESTION_PAPER',
+      'any.required': 'Material type is required'
+    }),
+    video_type: Joi.string().valid('UPLOAD', 'YOUTUBE').when('material_type', {
+      is: 'VIDEO_SOLUTION',
+      then: Joi.required().messages({
+        'any.required': 'Video type is required for video materials'
+      }),
+      otherwise: Joi.optional()
+    }).messages({
+      'any.only': 'Video type must be either UPLOAD or YOUTUBE'
+    }),
+    content_url: Joi.string().uri().when('material_type', {
+      is: 'VIDEO_SOLUTION',
+      then: Joi.required().messages({
+        'any.required': 'Content URL/YouTube link is required for video materials'
+      }),
+      otherwise: Joi.optional()
+    }).messages({
+      'string.uri': 'Content URL must be a valid URL'
+    }),
+    pdf_file_url: Joi.string().uri().when('material_type', {
+      is: 'QUESTION_PAPER',
+      then: Joi.required().messages({
+        'any.required': 'PDF file URL is required for question paper materials'
+      }),
+      otherwise: Joi.optional()
+    }).messages({
+      'string.uri': 'PDF URL must be a valid URL'
+    }),
+    duration: Joi.number().integer().positive().optional().messages({
+      'number.positive': 'Duration must be a positive number'
+    }),
+    description: Joi.string().max(500).optional().messages({
+      'string.max': 'Description cannot exceed 500 characters'
+    })
+  })
+};
