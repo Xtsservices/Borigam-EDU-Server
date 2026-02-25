@@ -35,6 +35,9 @@ router.post('/', adminOrInstituteAdminOnly, StudentController.createStudent);
 // Get all students (Admin only)
 router.get('/', adminOnly, StudentController.getAllStudents);
 
+// Get my enrolled courses (Student can view their own courses)
+router.get('/my-courses', StudentController.getMyEnrolledCourses);
+
 // Get students by institution (Admin or Institute Admin)
 router.get('/institution/:id', adminOrInstituteAdminOnly, StudentController.getStudentsByInstitution);
 

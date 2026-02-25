@@ -69,6 +69,7 @@ export class StudentQueries {
       s.created_at as student_created_at,
       i.id as institution_id, i.name as institution_name,
       c.id as course_id, c.title as course_title, c.description as course_description,
+      c.course_image, c.duration as course_duration,
       sc.enrollment_date, sc.progress, sc.completion_date,
       cc.name as category_name
     FROM students s
@@ -315,11 +316,11 @@ export class StudentProgressQueries {
   static readonly getCourseProgressPercentage = `
     SELECT 
       COUNT(cc.id) as total_contents,
-      COUNT(scp.id) as completed_contents,
-      ROUND((COUNT(scp.id) / COUNT(cc.id)) * 100, 2) as progress_percentage
+      SUM(CASE WHEN scp.is_completed = TRUE THEN 1 ELSE 0 END) as completed_contents,
+      ROUND((SUM(CASE WHEN scp.is_completed = TRUE THEN 1 ELSE 0 END) / COUNT(cc.id)) * 100, 2) as progress_percentage
     FROM course_contents cc
     LEFT JOIN student_content_progress scp ON cc.id = scp.content_id 
-      AND scp.student_id = ? AND scp.is_completed = TRUE
+      AND scp.student_id = ? AND scp.course_id = ?
     WHERE cc.course_id = ? AND cc.status = 1
   `;
 
@@ -342,24 +343,42 @@ export class StudentProgressQueries {
     ORDER BY cs.sort_order, cc.sort_order
   `;
 
+  // Get progress breakdown by section for a student
+  static readonly getSectionProgressForCourse = `
+    SELECT 
+      cs.id as section_id,
+      cs.title as section_title,
+      cs.sort_order,
+      COUNT(DISTINCT cc.id) as total_contents,
+      COUNT(DISTINCT scp.id) as completed_contents,
+      ROUND((COUNT(DISTINCT scp.id) / COUNT(DISTINCT cc.id)) * 100, 2) as section_progress
+    FROM course_sections cs
+    LEFT JOIN course_contents cc ON cs.id = cc.section_id AND cc.status = 1
+    LEFT JOIN student_content_progress scp ON cc.id = scp.content_id 
+      AND scp.student_id = ? AND scp.is_completed = TRUE
+    WHERE cs.course_id = ? AND cs.status = 1
+    GROUP BY cs.id, cs.title, cs.sort_order
+    ORDER BY cs.sort_order
+  `;
+
   // Update course progress in student_courses based on content completion
   static readonly updateCourseProgressFromContent = `
     UPDATE student_courses sc
     SET progress = (
-      SELECT ROUND((COUNT(scp.id) / COUNT(cc.id)) * 100, 2)
+      SELECT ROUND((SUM(CASE WHEN scp.is_completed = TRUE THEN 1 ELSE 0 END) / COUNT(cc.id)) * 100, 2)
       FROM course_contents cc
       LEFT JOIN student_content_progress scp ON cc.id = scp.content_id 
-        AND scp.student_id = sc.student_id AND scp.is_completed = TRUE
+        AND scp.student_id = sc.student_id AND scp.course_id = sc.course_id
       WHERE cc.course_id = sc.course_id AND cc.status = 1
     ),
     completion_date = CASE 
       WHEN (
-        SELECT ROUND((COUNT(scp.id) / COUNT(cc.id)) * 100, 2)
+        SELECT ROUND((SUM(CASE WHEN scp.is_completed = TRUE THEN 1 ELSE 0 END) / COUNT(cc.id)) * 100, 2)
         FROM course_contents cc
         LEFT JOIN student_content_progress scp ON cc.id = scp.content_id 
-          AND scp.student_id = sc.student_id AND scp.is_completed = TRUE
+          AND scp.student_id = sc.student_id AND scp.course_id = sc.course_id
         WHERE cc.course_id = sc.course_id AND cc.status = 1
-      ) = 100 THEN CURRENT_TIMESTAMP
+      ) >= 100 THEN CURRENT_TIMESTAMP
       ELSE NULL
     END,
     updated_by = ?

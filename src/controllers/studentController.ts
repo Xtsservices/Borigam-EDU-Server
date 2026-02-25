@@ -19,7 +19,11 @@ import {
   RoleQueries, 
   LoginQueries 
 } from '../queries/userQueries';
-import { CourseQueries } from '../queries/courseQueries';
+import { 
+  CourseQueries,
+  CourseSectionQueries,
+  CourseContentQueries
+} from '../queries/courseQueries';
 import { InstitutionQueries } from '../queries/institutionQueries';
 import { DatabaseTransaction, DatabaseHelpers } from '../utils/database';
 import { EmailService } from '../utils/emailService';
@@ -894,9 +898,11 @@ export class StudentController {
               id: row.course_id,
               title: row.course_title,
               description: row.course_description,
+              course_image: row.course_image,
+              course_duration: row.course_duration,
               category_name: row.category_name,
               enrollment_date: row.enrollment_date,
-              progress: row.progress,
+              progress: row.progress ? `${row.progress}%` : '0%',
               completion_date: row.completion_date
             }))
         };
@@ -1388,6 +1394,188 @@ export class StudentController {
     }
   }
 
+  /**
+   * Get logged-in student's enrolled courses with full details
+   * GET /api/students/my-courses
+   * Accessible to students (authenticated users)
+   */
+  static async getMyEnrolledCourses(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      // Must be authenticated
+      if (!req.user) {
+        res.status(401).json({
+          status: 'error',
+          message: 'Authentication required'
+        });
+        return;
+      }
+
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        // Try to find student record by email
+        let student = await DatabaseHelpers.executeSelectOne(
+          connection,
+          StudentQueries.getStudentByEmail,
+          [req.user!.email]
+        );
+
+        // If student record doesn't exist, return empty courses list
+        // (User might be admin or other role without student profile)
+        if (!student) {
+          console.log(`ℹ️ No student profile found for user: ${req.user!.email}`);
+          res.status(200).json({
+            status: 'success',
+            data: {
+              student: {
+                id: req.user!.id,
+                first_name: req.user!.first_name,
+                last_name: req.user!.last_name,
+                email: req.user!.email,
+                has_student_profile: false
+              },
+              courses: [],
+              total_courses: 0,
+              message: 'You do not have an active student profile. Please contact your administrator.'
+            }
+          });
+          return;
+        }
+
+        // Get all enrolled courses with basic details
+        const enrolledCourses = await DatabaseHelpers.executeSelect(
+          connection,
+          StudentCoursesQueries.getStudentCourses,
+          [student.id]
+        );
+
+        if (!enrolledCourses || enrolledCourses.length === 0) {
+          res.status(200).json({
+            status: 'success',
+            data: {
+              student: {
+                id: student.id,
+                first_name: student.first_name,
+                last_name: student.last_name,
+                email: student.email,
+                has_student_profile: true
+              },
+              courses: [],
+              total_courses: 0,
+              message: 'You have not enrolled in any courses yet.'
+            }
+          });
+          return;
+        }
+
+        // Enrich each course with sections and contents
+        const coursesWithDetails = await Promise.all(
+          enrolledCourses.map(async (course: any) => {
+            try {
+              // Get sections for this course
+              const sections = await DatabaseHelpers.executeSelect(
+                connection,
+                CourseSectionQueries.getSectionsByCourse,
+                [course.course_id]
+              );
+
+              // Get contents for each section
+              const enrichedSections = await Promise.all(
+                sections.map(async (section: any) => {
+                  const contents = await DatabaseHelpers.executeSelect(
+                    connection,
+                    CourseContentQueries.getContentsBySection,
+                    [section.id]
+                  );
+
+                  return {
+                    id: section.id,
+                    title: section.title,
+                    description: section.description,
+                    sort_order: section.sort_order,
+                    is_free: section.is_free,
+                    content_count: section.content_count,
+                    contents: contents.map((content: any) => ({
+                      id: content.id,
+                      title: content.title,
+                      description: content.description,
+                      content_type: content.content_type,
+                      duration: content.duration,
+                      sort_order: content.sort_order,
+                      is_free: content.is_free
+                    }))
+                  };
+                })
+              );
+
+              // Get progress for this course
+              const progressData = await DatabaseHelpers.executeSelectOne(
+                connection,
+                StudentProgressQueries.getCourseProgressPercentage,
+                [student.id, course.course_id, course.course_id]
+              );
+
+              return {
+                id: course.course_id,
+                title: course.title,
+                description: course.description,
+                course_image: course.course_image,
+                duration: course.duration,
+                category_name: course.category_name,
+                enrollment_date: course.enrollment_date,
+                completion_date: course.completion_date,
+                progress: `${course.progress || 0}%`,
+                progress_value: course.progress || 0,
+                total_contents: progressData?.total_contents || 0,
+                completed_contents: progressData?.completed_contents || 0,
+                sections: enrichedSections
+              };
+            } catch (courseError) {
+              console.error(`Error processing course ${course.course_id}:`, courseError);
+              // Return course with minimal data if processing fails
+              return {
+                id: course.course_id,
+                title: course.title,
+                description: course.description,
+                course_image: course.course_image,
+                duration: course.duration,
+                category_name: course.category_name,
+                enrollment_date: course.enrollment_date,
+                completion_date: course.completion_date,
+                progress: `${course.progress || 0}%`,
+                progress_value: course.progress || 0,
+                total_contents: 0,
+                completed_contents: 0,
+                sections: []
+              };
+            }
+          })
+        );
+
+        res.status(200).json({
+          status: 'success',
+          data: {
+            student: {
+              id: student.id,
+              first_name: student.first_name,
+              last_name: student.last_name,
+              email: student.email,
+              has_student_profile: true
+            },
+            courses: coursesWithDetails,
+            total_courses: coursesWithDetails.length
+          }
+        });
+      });
+
+    } catch (error) {
+      console.error('Error fetching enrolled courses:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error occurred while fetching enrolled courses',
+        error: process.env.NODE_ENV === 'development' ? error : undefined
+      });
+    }
+  }
+
   private static async getStudentCourses(connection: any, studentId: number): Promise<any[]> {
     return await DatabaseHelpers.executeSelect(
       connection,
@@ -1408,11 +1596,16 @@ export class StudentController {
       const { studentId, courseId, contentId } = req.params;
       const { is_completed = true, time_spent = 0 } = req.body;
 
-      // Get database connection
-      const db = await import("../../db");
-      const connection = await db.default.getConnection();
+      // Validate parameters
+      if (!studentId || !courseId || !contentId) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Missing required parameters: studentId, courseId, contentId'
+        });
+        return;
+      }
 
-      try {
+      await DatabaseTransaction.executeTransaction(async (connection) => {
         // Validate student exists
         const student = await DatabaseHelpers.executeSelectOne(
           connection,
@@ -1420,15 +1613,29 @@ export class StudentController {
           [parseInt(studentId as string)]
         );
 
-      if (!student) {
-        res.status(404).json({
-          status: 'error',
-          message: 'Student not found'
-        });
-        return;
-      }
+        if (!student) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Student not found'
+          });
+          return;
+        }
 
-      await DatabaseTransaction.executeTransaction(async (connection) => {
+        // Validate course exists and student is enrolled
+        const enrollment = await DatabaseHelpers.executeSelectOne(
+          connection,
+          StudentCoursesQueries.checkCourseEnrollment,
+          [parseInt(studentId as string), parseInt(courseId as string)]
+        );
+
+        if (!enrollment) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Student is not enrolled in this course'
+          });
+          return;
+        }
+
         // Track content progress
         await DatabaseHelpers.executeQuery(
           connection,
@@ -1445,22 +1652,31 @@ export class StudentController {
           ]
         );
 
-        // Update overall course progress
+        // Update overall course progress from content completion
         await DatabaseHelpers.executeQuery(
           connection,
           StudentProgressQueries.updateCourseProgressFromContent,
           [parseInt(studentId as string), parseInt(studentId as string), parseInt(courseId as string)]
         );
 
+        // Get updated progress
+        const progressData = await DatabaseHelpers.executeSelectOne(
+          connection,
+          StudentProgressQueries.getCourseProgressPercentage,
+          [parseInt(studentId as string), parseInt(courseId as string), parseInt(courseId as string)]
+        );
+
         res.status(200).json({
           status: 'success',
-          message: 'Content progress tracked successfully'
+          message: 'Content progress tracked successfully',
+          data: {
+            progress_percentage: progressData?.progress_percentage || 0,
+            total_contents: progressData?.total_contents || 0,
+            completed_contents: progressData?.completed_contents || 0,
+            formatted_progress: `${progressData?.progress_percentage || 0}%`
+          }
         });
       });
-
-      } finally {
-        connection.release();
-      }
 
     } catch (error) {
       console.error('Error tracking content progress:', error);
@@ -1479,15 +1695,33 @@ export class StudentController {
     try {
       const { studentId, courseId } = req.params;
 
-      // Get database connection
-      const db = await import("../../db");
-      const connection = await db.default.getConnection();
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        // Validate student and enrollment
+        const enrollment = await DatabaseHelpers.executeSelectOne(
+          connection,
+          StudentCoursesQueries.checkCourseEnrollment,
+          [parseInt(studentId as string), parseInt(courseId as string)]
+        );
 
-      try {
+        if (!enrollment) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Student is not enrolled in this course'
+          });
+          return;
+        }
+
         // Get progress percentage
         const progressData = await DatabaseHelpers.executeSelectOne(
           connection,
           StudentProgressQueries.getCourseProgressPercentage,
+          [parseInt(studentId as string), parseInt(courseId as string), parseInt(courseId as string)]
+        );
+
+        // Get section-wise progress
+        const sectionProgress = await DatabaseHelpers.executeSelect(
+          connection,
+          StudentProgressQueries.getSectionProgressForCourse,
           [parseInt(studentId as string), parseInt(courseId as string)]
         );
 
@@ -1502,14 +1736,14 @@ export class StudentController {
           status: 'success',
           data: {
             progress_percentage: progressData?.progress_percentage || 0,
+            formatted_progress: `${progressData?.progress_percentage || 0}%`,
             total_contents: progressData?.total_contents || 0,
             completed_contents: progressData?.completed_contents || 0,
+            section_progress: sectionProgress,
             content_details: detailedProgress
           }
         });
-      } finally {
-        connection.release();
-      }
+      });
 
     } catch (error) {
       console.error('Error getting course progress:', error);
@@ -1539,25 +1773,21 @@ export class InstituteAdminController {
         return;
       }
 
-      // Get database connection
-      const db = await import("../../db");
-      const connection = await db.default.getConnection();
-
-      try {
+      await DatabaseTransaction.executeTransaction(async (connection) => {
         // Get institution ID for the Institute Admin
         const institution = await DatabaseHelpers.executeSelectOne(
           connection,
           InstitutionStudentQueries.getInstitutionByAdminUserId,
-          [req.user.id]
+          [req.user!.id]
         );
 
-      if (!institution) {
-        res.status(404).json({
-          status: 'error',
-          message: 'Institution not found for this administrator'
-        });
-        return;
-      }
+        if (!institution) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Institution not found for this administrator'
+          });
+          return;
+        }
 
         // Get dashboard statistics
         const dashboardStats = await DatabaseHelpers.executeSelectOne(
@@ -1588,14 +1818,24 @@ export class InstituteAdminController {
               name: institution.name,
               email: institution.email
             },
-            statistics: dashboardStats,
-            courses: coursesWithStats,
-            recent_activities: recentActivities
+            statistics: dashboardStats ? {
+              total_students: dashboardStats.total_students || 0,
+              total_courses: dashboardStats.total_courses || 0,
+              students_completed_courses: dashboardStats.students_completed_courses || 0,
+              students_in_progress: dashboardStats.students_in_progress || 0,
+              overall_average_progress: `${dashboardStats.overall_average_progress || 0}%`
+            } : null,
+            courses: coursesWithStats?.map((course: any) => ({
+              ...course,
+              average_progress: `${course.average_progress || 0}%`
+            })),
+            recent_activities: recentActivities?.map((activity: any) => ({
+              ...activity,
+              progress: `${activity.progress || 0}%`
+            }))
           }
         });
-      } finally {
-        connection.release();
-      }
+      });
 
     } catch (error) {
       console.error('Error getting dashboard data:', error);
@@ -1620,25 +1860,21 @@ export class InstituteAdminController {
         return;
       }
 
-      // Get database connection
-      const db = await import("../../db");
-      const connection = await db.default.getConnection();
-
-      try {
+      await DatabaseTransaction.executeTransaction(async (connection) => {
         // Get institution ID for the Institute Admin
         const institution = await DatabaseHelpers.executeSelectOne(
           connection,
           InstitutionStudentQueries.getInstitutionByAdminUserId,
-          [req.user.id]
+          [req.user!.id]
         );
 
-      if (!institution) {
-        res.status(404).json({
-          status: 'error',
-          message: 'Institution not found for this administrator'
-        });
-        return;
-      }
+        if (!institution) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Institution not found for this administrator'
+          });
+          return;
+        }
 
         // Get all students with progress (without pagination)
         const getStudentsWithProgressQuery = `
@@ -1651,6 +1887,7 @@ export class InstituteAdminController {
             s.created_at as student_created_at,
             c.id as course_id,
             c.title as course_title,
+            c.course_image,
             sc.enrollment_date,
             sc.progress,
             sc.completion_date,
@@ -1673,37 +1910,38 @@ export class InstituteAdminController {
           [institution.id]
         );
 
-      // Group students by student ID to organize course progress
-      const groupedStudents = studentsWithProgress.reduce((acc: any, row: any) => {
-        const studentId = row.student_id;
-        
-        if (!acc[studentId]) {
-          acc[studentId] = {
-            student_id: row.student_id,
-            first_name: row.first_name,
-            last_name: row.last_name,
-            email: row.email,
-            mobile: row.mobile,
-            student_created_at: row.student_created_at,
-            courses: []
-          };
-        }
+        // Group students by student ID to organize course progress
+        const groupedStudents = studentsWithProgress.reduce((acc: any, row: any) => {
+          const studentId = row.student_id;
+          
+          if (!acc[studentId]) {
+            acc[studentId] = {
+              student_id: row.student_id,
+              first_name: row.first_name,
+              last_name: row.last_name,
+              email: row.email,
+              mobile: row.mobile,
+              student_created_at: row.student_created_at,
+              courses: []
+            };
+          }
 
-        if (row.course_id) {
-          acc[studentId].courses.push({
-            course_id: row.course_id,
-            course_title: row.course_title,
-            enrollment_date: row.enrollment_date,
-            progress: row.progress,
-            completion_date: row.completion_date,
-            status: row.status
-          });
-        }
+          if (row.course_id) {
+            acc[studentId].courses.push({
+              course_id: row.course_id,
+              course_title: row.course_title,
+              course_image: row.course_image,
+              enrollment_date: row.enrollment_date,
+              progress: `${row.progress || 0}%`,
+              completion_date: row.completion_date,
+              status: row.status
+            });
+          }
 
-        return acc;
-      }, {});
+          return acc;
+        }, {});
 
-      const students = Object.values(groupedStudents);
+        const students = Object.values(groupedStudents);
 
         res.status(200).json({
           status: 'success',
@@ -1711,9 +1949,7 @@ export class InstituteAdminController {
             students
           }
         });
-      } finally {
-        connection.release();
-      }
+      });
 
     } catch (error) {
       console.error('Error getting students with progress:', error);
@@ -1740,25 +1976,21 @@ export class InstituteAdminController {
 
       const { courseId } = req.params;
 
-      // Get database connection
-      const db = await import("../../db");
-      const connection = await db.default.getConnection();
-
-      try {
+      await DatabaseTransaction.executeTransaction(async (connection) => {
         // Get institution ID for the Institute Admin
         const institution = await DatabaseHelpers.executeSelectOne(
           connection,
           InstitutionStudentQueries.getInstitutionByAdminUserId,
-          [req.user.id]
+          [req.user!.id]
         );
 
-      if (!institution) {
-        res.status(404).json({
-          status: 'error',
-          message: 'Institution not found for this administrator'
-        });
-        return;
-      }
+        if (!institution) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Institution not found for this administrator'
+          });
+          return;
+        }
 
         // Get course students with detailed progress
         const courseStudents = await DatabaseHelpers.executeSelect(
@@ -1771,12 +2003,13 @@ export class InstituteAdminController {
           status: 'success',
           data: {
             course_id: parseInt(courseId as string),
-            students: courseStudents
+            students: courseStudents?.map((student: any) => ({
+              ...student,
+              progress: `${student.progress || 0}%`
+            }))
           }
         });
-      } finally {
-        connection.release();
-      }
+      });
 
     } catch (error) {
       console.error('Error getting course students progress:', error);

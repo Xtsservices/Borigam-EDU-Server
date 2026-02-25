@@ -79,6 +79,7 @@ export class AuthController {
         // Verify password
         const isPasswordValid = await bcrypt.compare(password, loginDetails.password_hash);
         if (!isPasswordValid) {
+          console.warn(`⚠️ Failed login attempt for ${email}: Invalid password`);
           res.status(401).json({
             status: 'error',
             message: 'Invalid email or password'
@@ -88,9 +89,10 @@ export class AuthController {
 
         // Check if user is active
         if (loginDetails.user_status !== 1) {
+          console.warn(`⚠️ Login attempt for inactive user: ${email}`);
           res.status(401).json({
             status: 'error',
-            message: 'User account is inactive'
+            message: 'User account is inactive. Please contact your administrator.'
           });
           return;
         }
@@ -417,8 +419,37 @@ export class AuthController {
         return;
       }
 
-      // Validate new password
-      const validation = validateData({ password: newPassword }, loginValidation.loginCredentials);
+      // Validate inputs
+      if (!currentPassword) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Validation failed',
+          errors: ['Current password is required']
+        });
+        return;
+      }
+
+      if (!newPassword) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Validation failed',
+          errors: ['New password is required']
+        });
+        return;
+      }
+
+      // Validate new password meets requirements
+      const passwordSchema = Joi.string()
+        .min(8)
+        .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
+        .required()
+        .messages({
+          'string.min': 'Password must be at least 8 characters',
+          'string.pattern.base': 'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character',
+          'any.required': 'Password is required'
+        });
+
+      const validation = validateData({ password: newPassword }, Joi.object({ password: passwordSchema }));
       
       if (!validation.isValid) {
         res.status(400).json({
