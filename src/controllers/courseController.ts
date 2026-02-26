@@ -2186,4 +2186,132 @@ export class CourseController {
     }
   }
 
+  /**
+   * Upload course content (PDF/DOC files)
+   * POST /api/courses/:courseId/content/upload
+   */
+  static async uploadCourseContent(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const courseId = parseInt(req.params.courseId as string);
+      const { title, content_type, description, section_id } = req.body;
+
+      if (isNaN(courseId)) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Invalid course ID'
+        });
+        return;
+      }
+
+      if (!req.file) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Please upload a file (PDF or DOC)'
+        });
+        return;
+      }
+
+      if (!section_id || isNaN(parseInt(section_id))) {
+        res.status(400).json({
+          status: 'error',
+          message: 'section_id is required in the request body and must be a valid number.'
+        });
+        return;
+      }
+
+      const allowedTypes = ['application/pdf', 'application/msword', 
+                          'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+
+      if (!allowedTypes.includes(req.file.mimetype)) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Only PDF and DOC/DOCX files are allowed'
+        });
+        return;
+      }
+
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        // Map mime type to content_type ENUM value
+        let contentTypeEnum: string;
+        switch (req.file!.mimetype) {
+          case 'application/pdf':
+            contentTypeEnum = 'PDF';
+            break;
+          case 'application/msword':
+            contentTypeEnum = 'DOC';
+            break;
+          case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+            contentTypeEnum = 'DOCX';
+            break;
+          default:
+            contentTypeEnum = 'PDF'; // fallback to PDF for safety
+        }
+
+        // Validate content_type from request body against ENUM values
+        const validContentTypes = ['TEXT', 'YOUTUBE', 'PDF', 'DOC', 'DOCX', 'IMAGE', 'VIDEO', 'AUDIO', 'QUIZ', 'ASSIGNMENT'];
+        const finalContentType = (content_type && validContentTypes.includes(content_type.toUpperCase())) 
+          ? content_type.toUpperCase() 
+          : contentTypeEnum;
+
+        // Upload to S3
+        const sectionIdNum = typeof section_id === 'string' ? parseInt(section_id) : section_id;
+        
+        const s3Result = await S3Service.uploadFile({
+          buffer: req.file!.buffer,
+          originalName: req.file!.originalname,
+          mimeType: req.file!.mimetype,
+          courseId: courseId,
+          sectionId: sectionIdNum,
+          contentType: finalContentType,
+          courseName: `Course-${courseId}`,
+          sectionName: `Section-${sectionIdNum}`
+        });
+
+        // Insert content record
+        const query = `
+          INSERT INTO course_contents (
+            course_id, section_id, title, content_type, content_url, description, 
+            file_name, file_size, created_by, updated_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
+
+        const result = await DatabaseHelpers.executeQuery(
+          connection,
+          query,
+          [
+            courseId,
+            parseInt(section_id),
+            title || req.file!.originalname,
+            finalContentType, // Use the validated ENUM value
+            s3Result.url, // Use s3Result.url instead of s3Result.Location
+            description || '',
+            req.file!.originalname,
+            req.file!.size,
+            req.user?.id,
+            req.user?.id
+          ]
+        );
+
+        res.status(201).json({
+          status: 'success',
+          message: 'Course content uploaded successfully',
+          data: {
+            id: result.insertId,
+            title: title || req.file!.originalname,
+            content_url: s3Result.url, // Use s3Result.url instead of s3Result.Location
+            file_name: req.file!.originalname,
+            file_size: req.file!.size,
+            section_id: parseInt(section_id)
+          }
+        });
+      });
+    } catch (error) {
+      console.error('❌ Error uploading course content:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to upload course content'
+      });
+    }
+  }
+
 }

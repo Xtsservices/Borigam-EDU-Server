@@ -36,6 +36,8 @@ interface AuthenticatedRequest extends Request {
     first_name: string;
     last_name: string;
     roles: string[];
+    studentId?: number;
+    institutionId?: number;
   };
 }
 
@@ -1750,6 +1752,90 @@ export class StudentController {
       res.status(500).json({
         status: 'error',
         message: 'Internal server error occurred while fetching progress'
+      });
+    }
+  }
+
+  /**
+   * STUDENT MY COURSES DASHBOARD
+   * GET /api/students/my-courses/dashboard
+   * Returns card counts for the authenticated student
+   * - Enrolled Courses: Total courses enrolled by student
+   * - In Progress: Courses not yet completed
+   * - Completed: Courses 100% completed
+   */
+  static async getMyCoursesCards(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const studentId = req.user?.studentId;
+
+      console.log(`🔍 Student Dashboard - User:`, {
+        id: req.user?.id,
+        email: req.user?.email,
+        roles: req.user?.roles,
+        studentId: studentId
+      });
+
+      // Validate student ID
+      if (!studentId) {
+        console.warn(`⚠️ No student ID found in token for user ${req.user?.id}`);
+        res.status(403).json({
+          status: 'error',
+          message: 'Student ID not found in token. User must be a Student.'
+        });
+        return;
+      }
+
+      console.log(`📊 Fetching dashboard data for student ${studentId}...`);
+
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        // Execute all queries in parallel
+        const [
+          enrolledResult,
+          inProgressResult,
+          completedResult
+        ] = await Promise.all([
+          DatabaseHelpers.executeQuery(
+            connection,
+            'SELECT COUNT(*) as total FROM student_courses WHERE student_id = ? AND status = 1',
+            [studentId]
+          ),
+          DatabaseHelpers.executeQuery(
+            connection,
+            'SELECT COUNT(*) as total FROM student_courses WHERE student_id = ? AND status = 1 AND progress < 100',
+            [studentId]
+          ),
+          DatabaseHelpers.executeQuery(
+            connection,
+            'SELECT COUNT(*) as total FROM student_courses WHERE student_id = ? AND status = 1 AND progress = 100',
+            [studentId]
+          )
+        ]);
+
+        console.log(`✅ Dashboard data fetched:`, {
+          enrolledCourses: enrolledResult[0]?.total,
+          inProgress: inProgressResult[0]?.total,
+          completed: completedResult[0]?.total
+        });
+
+        res.status(200).json({
+          status: 'success',
+          data: {
+            enrolledCourses: enrolledResult[0]?.total || 0,
+            inProgress: inProgressResult[0]?.total || 0,
+            completed: completedResult[0]?.total || 0
+          }
+        });
+      });
+    } catch (error) {
+      console.error('❌ Error fetching student courses dashboard:', error);
+      console.error('📋 Error details:', {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
+      });
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to fetch student courses dashboard',
+        details: process.env.NODE_ENV === 'development' ? (error instanceof Error ? error.message : String(error)) : undefined
       });
     }
   }

@@ -5,6 +5,7 @@ import roleRoutes from './roleRoutes';
 import courseRoutes from './courseRoutes';
 import institutionRoutes from './institutionRoutes';
 import studentRoutes from './studentRoutes';
+import examRoutes from './examRoutes';
 
 const router = Router();
 
@@ -40,6 +41,9 @@ router.use('/institutions', institutionRoutes);
 
 // Student management routes
 router.use('/students', studentRoutes);
+
+// Exam management routes
+router.use('/exams', examRoutes);
 
 // 404 handler for API routes
 router.use('/*', (req, res) => {

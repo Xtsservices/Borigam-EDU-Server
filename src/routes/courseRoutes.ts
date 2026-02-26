@@ -140,4 +140,20 @@ router.get('/:courseId/students/:studentId/progress', CourseController.getStuden
 // Delete content (Admin only)
 router.delete('/:courseId/contents/:contentId', adminOnly, CourseController.deleteContent);
 
+// Upload course content (PDF/DOC files) - Admin only
+router.post('/:courseId/content/upload', adminOnly,
+  (req, res, next) => {
+    uploadMiddleware.single('content_file')(req, res, (error: any) => {
+      if (error) {
+        return res.status(400).json({
+          status: 'error',
+          message: handleMulterError(error)
+        });
+      }
+      next();
+    });
+  },
+  CourseController.uploadCourseContent
+);
+
 export default router;

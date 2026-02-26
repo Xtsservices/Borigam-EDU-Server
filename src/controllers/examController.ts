@@ -651,6 +651,80 @@ export class ExamController {
       });
     }
   }
+
+  /**
+   * Get all exams
+   * GET /api/exams/all
+   */
+  static async getAllExams(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const institutionId = req.user?.institutionId;
+      const roleId = req.user?.roleId;
+      
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        let examsQuery = '';
+        let queryParams: any[] = [];
+
+        // Filter by institution for institute admin and students
+        if (roleId === 3 || roleId === 4) { // Institute admin or student
+          examsQuery = `
+            SELECT 
+              e.id,
+              e.exam_name as name,
+              e.description,
+              e.created_at as exam_date,
+              e.duration as duration_minutes,
+              e.status,
+              c.title as course_name,
+              et.name as exam_type
+            FROM exams e
+            LEFT JOIN courses c ON e.course_id = c.id
+            LEFT JOIN institution_courses ic ON c.id = ic.course_id
+            LEFT JOIN exam_types et ON e.exam_type_id = et.id
+            WHERE ic.institution_id = ? AND e.status = 1
+            ORDER BY e.created_at DESC
+          `;
+          queryParams = [institutionId];
+        } else {
+          // For global admin, show all exams
+          examsQuery = `
+            SELECT 
+              e.id,
+              e.exam_name as name,
+              e.description,
+              e.created_at as exam_date,
+              e.duration as duration_minutes,
+              e.status,
+              c.title as course_name,
+              et.name as exam_type,
+              i.name as institution_name
+            FROM exams e
+            LEFT JOIN courses c ON e.course_id = c.id
+            LEFT JOIN institution_courses ic ON c.id = ic.course_id
+            LEFT JOIN institutions i ON ic.institution_id = i.id
+            LEFT JOIN exam_types et ON e.exam_type_id = et.id
+            WHERE e.status = 1
+            ORDER BY e.created_at DESC
+          `;
+        }
+
+        const exams = await DatabaseHelpers.executeQuery(connection, examsQuery, queryParams);
+
+        res.status(200).json({
+          status: 'success',
+          data: exams,
+          message: `Found ${exams.length} exams`
+        });
+      });
+
+    } catch (error) {
+      console.error('Error fetching all exams:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
+  }
 }
 
 /**

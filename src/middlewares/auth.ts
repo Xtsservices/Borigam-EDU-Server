@@ -9,6 +9,8 @@ export interface AuthenticatedRequest extends Request {
     first_name: string;
     last_name: string;
     roles: string[];
+    institutionId?: number;
+    studentId?: number;
   };
 }
 
@@ -62,7 +64,9 @@ export const authenticateToken = (req: AuthenticatedRequest, res: Response, next
         email: decoded.email,
         first_name: decoded.firstName,
         last_name: decoded.lastName,
-        roles: decoded.roles || []
+        roles: decoded.roles || [],
+        institutionId: decoded.institutionId,
+        studentId: decoded.studentId
       };
 
       next();
