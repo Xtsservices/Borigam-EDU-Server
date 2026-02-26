@@ -23,6 +23,7 @@ import courseRoutes from "./src/routes/courseRoutes";
 import institutionRoutes from "./src/routes/institutionRoutes";
 import studentRoutes from "./src/routes/studentRoutes";
 import examRoutes from "./src/routes/examRoutes";
+import adminRoutes from "./src/routes/adminRoutes";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -44,6 +45,7 @@ app.use('/api/courses', courseRoutes);
 app.use('/api/institutions', institutionRoutes);
 app.use('/api/students', studentRoutes);
 app.use('/api/exams', examRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
