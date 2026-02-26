@@ -107,14 +107,73 @@ export class AuthController {
 
         const roleNames = userRoles.map(role => role.role_name);
 
+        console.log(`🔍 Login attempt - User ID: ${loginDetails.user_id}, Email: ${loginDetails.email}, Roles: ${roleNames.join(', ')}`);
+
         // Generate JWT token
-        const tokenPayload = {
+        const tokenPayload: any = {
           userId: loginDetails.user_id,
           email: loginDetails.email,
           firstName: loginDetails.first_name,
           lastName: loginDetails.last_name,
           roles: roleNames
         };
+
+        // If user is an Institute Admin, fetch and add institution_id
+        if (roleNames.includes('Institute Admin')) {
+          console.log(`🔎 Looking for institution created by user ${loginDetails.user_id}...`);
+          try {
+            // Try to find institution by created_by first
+            let institutionResult = await DatabaseHelpers.executeSelectOne(
+              connection,
+              'SELECT id FROM institutions WHERE created_by = ? AND status = 1 LIMIT 1',
+              [loginDetails.user_id]
+            );
+
+            // If not found by created_by, try finding by email
+            if (!institutionResult) {
+              console.log(`⚠️ Institution not found by created_by, trying by email...`);
+              institutionResult = await DatabaseHelpers.executeSelectOne(
+                connection,
+                'SELECT id FROM institutions WHERE email = ? AND status = 1 LIMIT 1',
+                [loginDetails.email]
+              );
+            }
+
+            if (institutionResult) {
+              tokenPayload.institutionId = institutionResult.id;
+              console.log(`✅ Institution ID ${institutionResult.id} added to token for user ${loginDetails.user_id}`);
+            } else {
+              console.warn(`⚠️ No institution found for Institute Admin user ${loginDetails.user_id} (email: ${loginDetails.email})`);
+              // List all institutions for debugging
+              const allInstitutions = await DatabaseHelpers.executeSelect(
+                connection,
+                'SELECT id, email, created_by FROM institutions WHERE status = 1 LIMIT 5'
+              );
+              console.log(`📋 Sample institutions in DB:`, allInstitutions);
+            }
+          } catch (err) {
+            console.error('❌ Error fetching institution ID:', err);
+          }
+        }
+
+        // If user is a Student, fetch and add student_id
+        if (roleNames.includes('Student')) {
+          try {
+            const studentResult = await DatabaseHelpers.executeSelectOne(
+              connection,
+              'SELECT id FROM students WHERE email = ? AND status = 1 LIMIT 1',
+              [loginDetails.email]
+            );
+            if (studentResult) {
+              tokenPayload.studentId = studentResult.id;
+              console.log(`✅ Student ID ${studentResult.id} added to token for user ${loginDetails.user_id}`);
+            } else {
+              console.warn(`⚠️ No student found for user ${loginDetails.user_id}`);
+            }
+          } catch (err) {
+            console.error('❌ Error fetching student ID:', err);
+          }
+        }
 
         const token = jwt.sign(
           tokenPayload,
@@ -142,18 +201,30 @@ export class AuthController {
         // Clear rate limit for this user on successful login
         clearRateLimit(req);
 
+        const responseUserData: any = {
+          id: loginDetails.user_id,
+          firstName: loginDetails.first_name,
+          lastName: loginDetails.last_name,
+          email: loginDetails.email,
+          roles: roleNames
+        };
+
+        // Include institutionId if user is Institute Admin
+        if (tokenPayload.institutionId) {
+          responseUserData.institutionId = tokenPayload.institutionId;
+        }
+
+        // Include studentId if user is Student
+        if (tokenPayload.studentId) {
+          responseUserData.studentId = tokenPayload.studentId;
+        }
+
         res.status(200).json({
           status: 'success',
           message: 'Login successful',
           data: {
             token,
-            user: {
-              id: loginDetails.user_id,
-              firstName: loginDetails.first_name,
-              lastName: loginDetails.last_name,
-              email: loginDetails.email,
-              roles: roleNames
-            }
+            user: responseUserData
           }
         });
       });

@@ -46,10 +46,13 @@ router.delete('/types/:id', adminOnly, ExamTypeController.deleteExamType);
 // Create exam
 router.post('/', adminOnly, ExamController.createExam);
 
+// Get all exams (for all authenticated users with proper filtering)
+router.get('/all', ExamController.getAllExams);
+
 // Get exams by course
 router.get('/course/:courseId', ExamController.getExamsByCourse);
 
-// Get exam by ID
+// Get exam by ID  
 router.get('/:id', ExamController.getExamById);
 
 // Update exam

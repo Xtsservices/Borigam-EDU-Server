@@ -521,4 +521,44 @@ export class AdminDashboardQueries {
     ORDER BY sc.created_at DESC
     LIMIT 10
   `;
+
+  /**
+   * STUDENT DASHBOARD QUERIES
+   */
+
+  /**
+   * Get total enrolled courses for a student
+   */
+  static readonly getTotalEnrolledCourses = `
+    SELECT COUNT(DISTINCT course_id) as total
+    FROM student_courses 
+    WHERE student_id = ? AND status = 1
+  `;
+
+  /**
+   * Get total in-progress courses for a student (not completed)
+   */
+  static readonly getInProgressCourses = `
+    SELECT COUNT(DISTINCT course_id) as total
+    FROM student_courses 
+    WHERE student_id = ? AND status = 1 AND completion_date IS NULL
+  `;
+
+  /**
+   * Get total completed courses for a student
+   */
+  static readonly getCompletedCourses = `
+    SELECT COUNT(DISTINCT course_id) as total
+    FROM student_courses 
+    WHERE student_id = ? AND status = 1 AND completion_date IS NOT NULL
+  `;
+
+  /**
+   * Get average progress across all enrolled courses for a student
+   */
+  static readonly getAverageProgress = `
+    SELECT ROUND(AVG(progress), 2) as avg_progress
+    FROM student_courses 
+    WHERE student_id = ? AND status = 1
+  `;
 }

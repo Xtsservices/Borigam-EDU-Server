@@ -22,6 +22,17 @@ export class AdminController {
    */
   static async getDashboardCards(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
+      // Check if user is Admin
+      if (!req.user?.roles?.includes('Admin')) {
+        res.status(403).json({
+          status: 'error',
+          message: 'Only Admins can access this endpoint'
+        });
+        return;
+      }
+
+      console.log(`✅ Admin dashboard accessed by user ${req.user?.id}`);
+
       await DatabaseTransaction.executeTransaction(async (connection) => {
         // Execute all queries in parallel
         const [
