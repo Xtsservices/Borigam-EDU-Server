@@ -325,6 +325,10 @@ export class CourseController {
 
           // Generate signed URL for S3 course image
           await processCourseImageSignedUrl(course);
+          // Fallback if image is missing or invalid
+          if (!course.course_image || typeof course.course_image !== 'string' || !course.course_image.startsWith('http')) {
+            course.course_image = 'https://your-default-image-url.com/default-course.png';
+          }
 
           // Get course sections and contents
           const sections = await DatabaseHelpers.executeSelect(
@@ -417,6 +421,10 @@ export class CourseController {
 
         // Generate signed URL for S3 course image
         await processCourseImageSignedUrl(course);
+        // Fallback if image is missing or invalid
+        if (!course.course_image || typeof course.course_image !== 'string' || !course.course_image.startsWith('http')) {
+          course.course_image = 'https://your-default-image-url.com/default-course.png';
+        }
 
         // Get course sections and contents
         const sections = await DatabaseHelpers.executeSelect(
