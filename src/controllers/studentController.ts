@@ -27,6 +27,7 @@ import {
 import { InstitutionQueries } from '../queries/institutionQueries';
 import { DatabaseTransaction, DatabaseHelpers } from '../utils/database';
 import { EmailService } from '../utils/emailService';
+import { SignedUrlHelper } from '../utils/signedUrlHelper';
 
 // Define interfaces for better type safety
 interface AuthenticatedRequest extends Request {
@@ -1524,6 +1525,9 @@ export class StudentController {
         const coursesWithDetails = await Promise.all(
           enrolledCourses.map(async (course: any) => {
             try {
+              // Generate signed URL for course image
+              await SignedUrlHelper.processCourseImageSignedUrl(course);
+              
               // Get sections for this course
               const sections = await DatabaseHelpers.executeSelect(
                 connection,
