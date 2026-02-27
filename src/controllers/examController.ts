@@ -668,7 +668,7 @@ export class ExamController {
         // Filter by institution for institute admin and students
         if (roleId === 3 || roleId === 4) { // Institute admin or student
           examsQuery = `
-            SELECT 
+            SELECT DISTINCT
               e.id,
               e.exam_name as name,
               e.description,
@@ -688,7 +688,7 @@ export class ExamController {
         } else {
           // For global admin, show all exams
           examsQuery = `
-            SELECT 
+            SELECT DISTINCT
               e.id,
               e.exam_name as name,
               e.description,
@@ -696,12 +696,9 @@ export class ExamController {
               e.duration as duration_minutes,
               e.status,
               c.title as course_name,
-              et.name as exam_type,
-              i.name as institution_name
+              et.name as exam_type
             FROM exams e
             LEFT JOIN courses c ON e.course_id = c.id
-            LEFT JOIN institution_courses ic ON c.id = ic.course_id
-            LEFT JOIN institutions i ON ic.institution_id = i.id
             LEFT JOIN exam_types et ON e.exam_type_id = et.id
             WHERE e.status = 1
             ORDER BY e.created_at DESC

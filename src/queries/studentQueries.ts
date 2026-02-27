@@ -81,6 +81,27 @@ export class StudentQueries {
     WHERE s.id = ? AND s.status = 1
     ORDER BY sc.enrollment_date DESC
   `;
+
+  // Get all students with institution and courses
+  static readonly getAllStudentsWithDetails = `
+    SELECT 
+      s.id as student_id, s.first_name, s.last_name, s.email, s.mobile,
+      s.status, s.created_by, s.updated_by,
+      s.created_at as student_created_at, s.updated_at as student_updated_at,
+      i.id as institution_id, i.name as institution_name,
+      c.id as course_id, c.title as course_title, c.description as course_description,
+      c.course_image, c.duration as course_duration,
+      sc.enrollment_date, sc.progress, sc.completion_date,
+      cc.name as category_name
+    FROM students s
+    LEFT JOIN institute_students ins ON s.id = ins.student_id AND ins.status = 1
+    LEFT JOIN institutions i ON ins.institution_id = i.id AND i.status = 1
+    LEFT JOIN student_courses sc ON s.id = sc.student_id AND sc.status = 1
+    LEFT JOIN courses c ON sc.course_id = c.id AND c.status = 1
+    LEFT JOIN course_categories cc ON c.category_id = cc.id
+    WHERE s.status = 1
+    ORDER BY s.created_at DESC, sc.enrollment_date DESC
+  `;
 }
 
 // Institute Students CRUD operations

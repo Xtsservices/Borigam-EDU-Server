@@ -30,6 +30,13 @@ export class UserQueries {
     WHERE id = ?
   `;
 
+  // Update user profile (excluding email and password)
+  static updateUserProfile = `
+    UPDATE users 
+    SET first_name = ?, last_name = ?, phone = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `;
+
   // Soft delete user
   static deleteUser = `
     UPDATE users 

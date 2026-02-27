@@ -479,6 +479,124 @@ export class AuthController {
   }
 
   /**
+   * Update User Profile (except email and password)
+   * PUT /api/auth/profile
+   */
+  static async updateProfile(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({
+          status: 'error',
+          message: 'User not authenticated'
+        });
+        return;
+      }
+
+      const { first_name, last_name, phone } = req.body;
+
+      // Validate inputs - at least one field should be provided
+      if (!first_name && !last_name && !phone) {
+        res.status(400).json({
+          status: 'error',
+          message: 'At least one field (first_name, last_name, or phone) must be provided for update'
+        });
+        return;
+      }
+
+      // Validate data if provided
+      const validationSchema = Joi.object({
+        first_name: Joi.string().min(1).max(100).optional(),
+        last_name: Joi.string().min(1).max(100).optional(),
+        phone: Joi.string().pattern(/^[0-9\-\+\s\(\)]{7,}$/).optional().messages({
+          'string.pattern.base': 'Phone number format is invalid'
+        })
+      });
+
+      const validation = validateData(req.body, validationSchema);
+      if (!validation.isValid) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Validation failed',
+          errors: validation.errors
+        });
+        return;
+      }
+
+      await DatabaseTransaction.executeTransaction(async (connection) => {
+        
+        // Get current user details
+        const currentUser = await DatabaseHelpers.executeSelectOne(
+          connection,
+          UserQueries.getUserById,
+          [req.user!.id]
+        );
+
+        if (!currentUser) {
+          res.status(404).json({
+            status: 'error',
+            message: 'User not found'
+          });
+          return;
+        }
+
+        // Prepare update fields with existing values if not provided
+        const updatedFirstName = first_name !== undefined ? first_name : currentUser.first_name;
+        const updatedLastName = last_name !== undefined ? last_name : currentUser.last_name;
+        const updatedPhone = phone !== undefined ? phone : currentUser.phone;
+
+        // Update user in database
+        await DatabaseHelpers.executeQuery(
+          connection,
+          UserQueries.updateUserProfile,
+          [updatedFirstName, updatedLastName, updatedPhone, req.user!.id, req.user!.id]
+        );
+
+        // Get updated user details
+        const updatedUser = await DatabaseHelpers.executeSelectOne(
+          connection,
+          UserQueries.getUserById,
+          [req.user!.id]
+        );
+
+        // Get user roles
+        const userRoles = await DatabaseHelpers.executeSelect(
+          connection,
+          RoleQueries.getUserRoles,
+          [req.user!.id]
+        );
+
+        res.status(200).json({
+          status: 'success',
+          message: 'Profile updated successfully',
+          data: {
+            user: {
+              id: updatedUser.id,
+              firstName: updatedUser.first_name,
+              lastName: updatedUser.last_name,
+              email: updatedUser.email,
+              phone: updatedUser.phone,
+              status: updatedUser.status,
+              roles: userRoles.map(role => ({
+                id: role.role_id,
+                name: role.role_name,
+                description: role.description
+              })),
+              updatedAt: updatedUser.updated_at
+            }
+          }
+        });
+      });
+
+    } catch (error) {
+      console.error('Update profile error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  /**
    * Change Password
    * PUT /api/auth/change-password
    */
