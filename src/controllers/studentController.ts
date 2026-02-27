@@ -739,12 +739,64 @@ export class StudentController {
 
       await DatabaseTransaction.executeTransaction(async (connection) => {
         
-        // Get all students
-        const students = await DatabaseHelpers.executeSelect(
+        // Get all students with their details (institution and courses)
+        const rawData = await DatabaseHelpers.executeSelect(
           connection,
-          StudentQueries.getAllStudentsBase,
+          StudentQueries.getAllStudentsWithDetails,
           []
         );
+
+        // Group data by student_id
+        const studentMap = new Map();
+
+        for (const row of rawData) {
+          const studentId = row.student_id;
+
+          if (!studentMap.has(studentId)) {
+            studentMap.set(studentId, {
+              id: row.student_id,
+              first_name: row.first_name,
+              last_name: row.last_name,
+              email: row.email,
+              mobile: row.mobile,
+              status: row.status,
+              created_by: row.created_by,
+              updated_by: row.updated_by,
+              created_at: row.student_created_at,
+              updated_at: row.student_updated_at,
+              institution: row.institution_id ? {
+                id: row.institution_id,
+                name: row.institution_name
+              } : null,
+              enrolled_courses: [],
+              courses_count: 0
+            });
+          }
+
+          // Add course if it exists
+          if (row.course_id) {
+            const student = studentMap.get(studentId);
+            // Check if course is already added (to avoid duplicates)
+            const courseExists = student.enrolled_courses.some(c => c.id === row.course_id);
+            if (!courseExists) {
+              student.enrolled_courses.push({
+                id: row.course_id,
+                title: row.course_title,
+                description: row.course_description,
+                course_image: row.course_image,
+                duration: row.course_duration,
+                category_name: row.category_name,
+                enrollment_date: row.enrollment_date,
+                progress: row.progress,
+                completion_date: row.completion_date
+              });
+              student.courses_count++;
+            }
+          }
+        }
+
+        // Convert map to array
+        const students = Array.from(studentMap.values());
 
         res.status(200).json({
           status: 'success',

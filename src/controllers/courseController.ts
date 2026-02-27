@@ -141,6 +141,15 @@ export class CourseController {
           finalCourseImage = uploadResult.url;
           console.log('✅ Image uploaded to S3:', finalCourseImage);
         } else if (course_image) {
+          // Validate image URL - reject wrapper URLs like Google Images
+          if (course_image.includes('google.com/imgres') || course_image.includes('google.com/url')) {
+            res.status(400).json({
+              status: 'error',
+              message: 'Invalid image URL. Do not use Google Images URLs. Use direct image URLs or upload the image file.'
+            });
+            return;
+          }
+          
           // URL provided in form-data
           finalCourseImage = course_image;
           console.log('🔗 Using provided URL:', finalCourseImage);
@@ -542,6 +551,15 @@ export class CourseController {
           updateImage = true;
           console.log('✅ Image uploaded to S3:', finalCourseImage);
         } else if (course_image !== undefined) {
+          // Validate image URL - reject wrapper URLs like Google Images
+          if (course_image && (course_image.includes('google.com/imgres') || course_image.includes('google.com/url'))) {
+            res.status(400).json({
+              status: 'error',
+              message: 'Invalid image URL. Do not use Google Images URLs. Use direct image URLs or upload the image file.'
+            });
+            return;
+          }
+          
           // URL provided in body (could be new URL or null to remove image)
           finalCourseImage = course_image;
           updateImage = true;
