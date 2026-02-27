@@ -1765,6 +1765,16 @@ export class CourseController {
     try {
       const courseId = parseInt(req.params.courseId as string);
       const sectionId = parseInt(req.params.sectionId as string);
+      
+      // Check if request body exists
+      if (!req.body) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Request body is missing. Please provide JSON data with Content-Type: application/json'
+        });
+        return;
+      }
+      
       const { title, description, sort_order, is_free } = req.body;
 
       if (isNaN(courseId) || isNaN(sectionId)) {
@@ -1923,6 +1933,15 @@ export class CourseController {
       const courseId = parseInt(req.params.courseId as string);
       const sectionId = parseInt(req.params.sectionId as string);
       const contentId = parseInt(req.params.contentId as string);
+      
+      // Check if request body exists
+      if (!req.body) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Request body is missing. Please provide JSON data with Content-Type: application/json'
+        });
+        return;
+      }
       
       const { 
         title, 
@@ -2219,6 +2238,16 @@ export class CourseController {
   static async uploadCourseContent(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const courseId = parseInt(req.params.courseId as string);
+      
+      // Check if request body exists for form-data
+      if (!req.body) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Request body is missing. Please provide form-data with fields: title, description, content_type, section_id'
+        });
+        return;
+      }
+      
       const { title, content_type, description, section_id } = req.body;
 
       if (isNaN(courseId)) {
