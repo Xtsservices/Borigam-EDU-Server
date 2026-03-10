@@ -427,6 +427,8 @@ export async function initializeDatabase(): Promise<void> {
                 description TEXT,
                 sort_order INT DEFAULT 0,
                 status SMALLINT DEFAULT 1,
+                mime_type VARCHAR(100),
+                file_name VARCHAR(500),
                 created_by BIGINT NOT NULL,
                 updated_by BIGINT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -436,6 +438,33 @@ export async function initializeDatabase(): Promise<void> {
                 FOREIGN KEY (updated_by) REFERENCES users(id)
             );
         `);
+
+        // Add missing columns to existing exam_materials table (migration)
+        try {
+            await connection.query(`
+                ALTER TABLE exam_materials ADD COLUMN mime_type VARCHAR(100)
+            `);
+            console.log(`✅ Added mime_type column to exam_materials`);
+        } catch (error: any) {
+            if (error.message.includes('Duplicate column name')) {
+                console.log(`✅ mime_type column already exists in exam_materials`);
+            } else {
+                console.warn(`⚠️ Could not add mime_type column:`, error.message);
+            }
+        }
+
+        try {
+            await connection.query(`
+                ALTER TABLE exam_materials ADD COLUMN file_name VARCHAR(500)
+            `);
+            console.log(`✅ Added file_name column to exam_materials`);
+        } catch (error: any) {
+            if (error.message.includes('Duplicate column name')) {
+                console.log(`✅ file_name column already exists in exam_materials`);
+            } else {
+                console.warn(`⚠️ Could not add file_name column:`, error.message);
+            }
+        }
 
         // Insert static roles if they don't exist
         const roles = [

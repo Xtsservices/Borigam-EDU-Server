@@ -19,7 +19,7 @@ const fileFilter = (req: AuthenticatedRequest, file: Express.Multer.File, cb: (e
   if (S3Service.isAllowedFileType(file.mimetype, file.originalname)) {
     cb(null, true);
   } else {
-    cb(new Error(`File type not allowed. Allowed types: PDF, DOC, DOCX, PPT, PPTX, TXT, JPG, JPEG, PNG, GIF, MP4, AVI, MOV, MP3, WAV`));
+    cb(new Error(`File type not allowed. Allowed types: PDF, DOC, DOCX, PPT, PPTX, TXT, JPG, JPEG, PNG, GIF, WEBP, MP4, AVI, MOV, MP3, WAV`));
   }
 };
 

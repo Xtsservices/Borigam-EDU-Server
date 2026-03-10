@@ -778,7 +778,7 @@ export class StudentController {
           if (row.course_id) {
             const student = studentMap.get(studentId);
             // Check if course is already added (to avoid duplicates)
-            const courseExists = student.enrolled_courses.some(c => c.id === row.course_id);
+            const courseExists = student.enrolled_courses.some((c: any) => c.id === row.course_id);
             if (!courseExists) {
               student.enrolled_courses.push({
                 id: row.course_id,

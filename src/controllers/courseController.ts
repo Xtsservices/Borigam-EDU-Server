@@ -2261,7 +2261,7 @@ export class CourseController {
       if (!req.file) {
         res.status(400).json({
           status: 'error',
-          message: 'Please upload a file (PDF or DOC)'
+          message: 'Please upload a file (PDF, DOC, DOCX, MP4, AVI, or MOV)'
         });
         return;
       }
@@ -2274,13 +2274,28 @@ export class CourseController {
         return;
       }
 
-      const allowedTypes = ['application/pdf', 'application/msword', 
-                          'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+      const allowedTypes = [
+        // Documents
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        // Videos
+        'video/mp4',
+        'video/avi',
+        'video/quicktime',
+        'video/x-msvideo',
+        // Images
+        'image/jpeg',
+        'image/jpg',
+        'image/png',
+        'image/gif',
+        'image/webp'
+      ];
 
       if (!allowedTypes.includes(req.file.mimetype)) {
         res.status(400).json({
           status: 'error',
-          message: 'Only PDF and DOC/DOCX files are allowed'
+          message: 'Only PDF, DOC, DOCX, JPG, JPEG, PNG, GIF, WEBP, MP4, AVI, and MOV files are allowed'
         });
         return;
       }
@@ -2297,6 +2312,19 @@ export class CourseController {
             break;
           case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
             contentTypeEnum = 'DOCX';
+            break;
+          case 'video/mp4':
+          case 'video/avi':
+          case 'video/quicktime':
+          case 'video/x-msvideo':
+            contentTypeEnum = 'VIDEO';
+            break;
+          case 'image/jpeg':
+          case 'image/jpg':
+          case 'image/png':
+          case 'image/gif':
+          case 'image/webp':
+            contentTypeEnum = 'IMAGE';
             break;
           default:
             contentTypeEnum = 'PDF'; // fallback to PDF for safety
@@ -2326,8 +2354,8 @@ export class CourseController {
         const query = `
           INSERT INTO course_contents (
             course_id, section_id, title, content_type, content_url, description, 
-            file_name, file_size, created_by, updated_by
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            file_name, file_size, mime_type, created_by, updated_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
 
         const result = await DatabaseHelpers.executeQuery(
@@ -2342,10 +2370,30 @@ export class CourseController {
             description || '',
             req.file!.originalname,
             req.file!.size,
+            req.file!.mimetype, // Store MIME type for proper video streaming
             req.user?.id,
             req.user?.id
           ]
         );
+
+        // Generate signed URL for videos and images to ensure they're accessible
+        let accessibleUrl: string = s3Result.url;
+        if (finalContentType === 'VIDEO' || finalContentType === 'IMAGE') {
+          try {
+            // Generate signed URL with MIME type for proper streaming/display support
+            const signedUrl = await SignedUrlHelper.generateSignedUrl(s3Result.url, 86400, req.file!.mimetype);
+            // Use signed URL if generated, otherwise fallback to direct S3 URL
+            if (signedUrl) {
+              accessibleUrl = signedUrl;
+              console.log(`✅ Generated signed URL for ${finalContentType} (${req.file!.mimetype}):`, accessibleUrl.substring(0, 80) + '...');
+            } else {
+              console.warn(`⚠️ Signed URL generation returned undefined for ${finalContentType}, using direct S3 URL`);
+            }
+          } catch (urlError) {
+            console.warn(`⚠️ Failed to generate signed URL for ${finalContentType}, using direct S3 URL:`, urlError);
+            // accessibleUrl already set to s3Result.url as fallback
+          }
+        }
 
         res.status(201).json({
           status: 'success',
@@ -2353,10 +2401,12 @@ export class CourseController {
           data: {
             id: result.insertId,
             title: title || req.file!.originalname,
-            content_url: s3Result.url, // Use s3Result.url instead of s3Result.Location
+            content_type: finalContentType,
+            content_url: accessibleUrl, // Return signed URL for videos/images or direct S3 URL as fallback
             file_name: req.file!.originalname,
             file_size: req.file!.size,
-            section_id: parseInt(section_id)
+            section_id: parseInt(section_id),
+            mime_type: req.file!.mimetype // Include MIME type in response for client debugging
           }
         });
       });
