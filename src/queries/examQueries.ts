@@ -191,9 +191,9 @@ export class ExamMaterialQueries {
   static readonly createExamMaterial = `
     INSERT INTO exam_materials (
       exam_section_id, material_name, material_type, video_type, 
-      content_url, pdf_file_url, duration, description, sort_order, status, created_by
+      content_url, pdf_file_url, duration, description, sort_order, status, mime_type, file_name, created_by
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   // Get all materials for an exam section
@@ -210,6 +210,8 @@ export class ExamMaterialQueries {
       description,
       sort_order,
       status,
+      mime_type,
+      file_name,
       created_at,
       updated_at
     FROM exam_materials
@@ -230,7 +232,9 @@ export class ExamMaterialQueries {
       duration,
       description,
       sort_order,
-      status
+      status,
+      mime_type,
+      file_name
     FROM exam_materials
     WHERE id = ? AND status = 1
   `;
@@ -248,6 +252,8 @@ export class ExamMaterialQueries {
       em.duration,
       em.description,
       em.sort_order,
+      em.mime_type,
+      em.file_name,
       es.section_name,
       es.sort_order as section_order
     FROM exam_materials em

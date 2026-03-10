@@ -54,8 +54,9 @@ export class SignedUrlHelper {
   /**
    * Generate signed URL for a content item
    * Handles various content types (files, videos, etc.)
+   * Falls back to direct S3 URL if signing fails
    */
-  static async generateSignedUrl(url?: string, expiresIn: number = 86400): Promise<string | undefined> {
+  static async generateSignedUrl(url?: string, expiresIn: number = 86400, mimeType?: string): Promise<string | undefined> {
     if (!url) {
       return undefined;
     }
@@ -67,12 +68,12 @@ export class SignedUrlHelper {
         return url;
       }
 
-      // Generate and return signed URL
-      const signedUrl = await S3Service.generateSignedUrl(fileKey, expiresIn);
+      // Generate and return signed URL with content type for proper streaming
+      const signedUrl = await S3Service.generateSignedUrl(fileKey, expiresIn, mimeType);
       return signedUrl;
     } catch (error) {
-      console.error('Error generating signed URL:', { url, error });
-      // Return original URL on error
+      console.warn('Error generating signed URL, returning original URL:', { url, error });
+      // Return original URL on error (fallback to direct S3 URL)
       return url;
     }
   }
@@ -89,7 +90,20 @@ export class SignedUrlHelper {
     try {
       // Process content_url (for files, videos, etc.)
       if (content.content_url) {
-        content.content_url = await this.generateSignedUrl(content.content_url, expiresIn);
+        // Infer MIME type from filename if not in database
+        let mimeType = content.mime_type;
+        if (!mimeType && content.file_name) {
+          mimeType = S3Service.getMimeTypeFromFilename(content.file_name);
+          console.log(`📝 Inferred MIME type for ${content.file_name}: ${mimeType}`);
+        }
+        
+        // Pass MIME type for better streaming support on videos/images
+        const processedUrl = await this.generateSignedUrl(content.content_url, expiresIn, mimeType);
+        // Always keep original URL if processing fails (processedUrl could be undefined)
+        if (processedUrl) {
+          content.content_url = processedUrl;
+        }
+        // If processedUrl is undefined, keep original content.content_url
       }
 
       // Process content_text (for embedded S3 URLs in text content)
@@ -99,12 +113,18 @@ export class SignedUrlHelper {
         const matches = content.content_text.match(s3UrlPattern);
 
         if (matches) {
+          // Get MIME type for embedded URLs
+          let mimeType = content.mime_type;
+          if (!mimeType && content.file_name) {
+            mimeType = S3Service.getMimeTypeFromFilename(content.file_name);
+          }
+
           // Process each URL concurrently
           const urlMap = new Map<string, string>();
           
           for (const match of matches) {
             if (!urlMap.has(match)) {
-              const signedUrl = await this.generateSignedUrl(match, expiresIn);
+              const signedUrl = await this.generateSignedUrl(match, expiresIn, mimeType);
               if (signedUrl) {
                 urlMap.set(match, signedUrl);
               }
@@ -150,19 +170,76 @@ export class SignedUrlHelper {
     }
 
     try {
+      console.log(`🔍 Processing exam material URLs - id=${material.id}, type=${material.material_type}`);
+      
+      // Infer MIME type if not in database
+      let mimeType = material.mime_type;
+      if (!mimeType && material.file_name) {
+        mimeType = S3Service.getMimeTypeFromFilename(material.file_name);
+      }
+      
+      // Infer MIME type from content_url filename if still not available
+      if (!mimeType && material.content_url) {
+        const filename = material.content_url.split('/').pop(); // Get last part - the filename
+        mimeType = S3Service.getMimeTypeFromFilename(filename);
+        console.log(`📝 Inferred MIME type from content_url filename: ${mimeType}`);
+      }
+
       // Process pdf_file_url
       if (material.pdf_file_url) {
-        material.pdf_file_url = await this.generateSignedUrl(material.pdf_file_url, expiresIn);
+        console.log(`  📄 Processing pdf_file_url: ${material.pdf_file_url.substring(0, 50)}...`);
+        let urlToProcess = material.pdf_file_url;
+        // If it's just a filename/key without URL format, try to construct full S3 URL
+        if (!urlToProcess.includes('://') && urlToProcess.includes('/')) {
+          // It's likely an S3 key like "exams/1/4/filename"
+          urlToProcess = `https://borigam.s3.ap-south-2.amazonaws.com/${urlToProcess}`;
+          console.log(`  ✏️ Constructed S3 URL from key: ${urlToProcess.substring(0, 50)}...`);
+        } else if (!urlToProcess.includes('://')) {
+          // Just a filename - skip, it's not a valid S3 reference
+          console.warn(`⚠️ Exam material pdf_file_url is just a filename, unable to process: ${urlToProcess}`);
+          return;
+        }
+        const processedPdfUrl = await this.generateSignedUrl(urlToProcess, expiresIn, mimeType);
+        if (processedPdfUrl) {
+          material.pdf_file_url = processedPdfUrl;
+          console.log(`  ✅ Generated signed URL for pdf_file_url`);
+        } else {
+          console.warn(`  ⚠️ Failed to generate signed URL for pdf_file_url`);
+        }
       }
 
       // Process content_url (for videos stored in S3)
       if (material.content_url) {
-        // Only generate signed URL if it's an S3 URL (not YouTube)
-        const fileKey = this.extractS3FileKey(material.content_url);
-        if (fileKey) {
-          material.content_url = await this.generateSignedUrl(material.content_url, expiresIn);
+        console.log(`  🎬 Processing content_url: ${material.content_url.substring(0, 50)}...`);
+        
+        // Skip YouTube URLs - they don't need processing
+        if (material.content_url.includes('youtube') || material.content_url.includes('youtu.be')) {
+          console.log(`  ℹ️ YouTube URL detected, skipping signed URL generation`);
+          return;
         }
-        // If it's YouTube, keep as is
+        
+        // Check if it's a full S3 URL
+        let urlToProcess = material.content_url;
+        const fileKey = this.extractS3FileKey(material.content_url);
+        
+        if (fileKey) {
+          // It's an S3 URL or valid S3 key - process normally
+          console.log(`  ✏️ Extracted S3 file key: ${fileKey.substring(0, 50)}...`);
+          const processedContentUrl = await this.generateSignedUrl(urlToProcess, expiresIn, mimeType);
+          if (processedContentUrl) {
+            material.content_url = processedContentUrl;
+            console.log(`  ✅ Generated signed URL for content_url`);
+          } else {
+            console.warn(`  ⚠️ Failed to generate signed URL for content_url`);
+          }
+        } else if (!material.content_url.includes('://')) {
+          // It's just a filename, not a full URL
+          // This shouldn't happen with new uploads, but handles legacy data
+          console.warn(`⚠️ Exam material content_url appears to be just a filename, unable to generate signed URL: ${material.content_url}`);
+          // Don't modify it, keep as-is since we can't process it
+        } else {
+          console.warn(`⚠️ Could not extract S3 file key from content_url: ${material.content_url}`);
+        }
       }
 
       // Process description if it contains S3 URLs
@@ -171,19 +248,21 @@ export class SignedUrlHelper {
         const matches = material.description.match(s3UrlPattern);
 
         if (matches) {
+          console.log(`  📝 Found ${matches.length} S3 URLs in description`);
           let updatedText = material.description;
           for (const match of matches) {
-            const signedUrl = await this.generateSignedUrl(match, expiresIn);
+            const signedUrl = await this.generateSignedUrl(match, expiresIn, mimeType);
             if (signedUrl) {
               updatedText = updatedText.replaceAll(match, signedUrl);
             }
           }
           material.description = updatedText;
+          console.log(`  ✅ Updated description with signed URLs`);
         }
       }
     } catch (error) {
-      console.error('Error processing exam material signed URLs:', { materialId: material.id, error });
-      // Continue without signed URLs if generation fails
+      console.error('❌ Error processing exam material signed URLs:', error);
+      // Continue anyway - don't fail the entire request
     }
   }
 

@@ -87,7 +87,7 @@ export class ExamTypeController {
         }
 
         // Create exam type
-        const result = await DatabaseHelpers.executeQuery(
+        const examTypeId = await DatabaseHelpers.executeInsert(
           connection,
           ExamTypeQueries.createExamType,
           [name, description || null, 1, req.user!.id]
@@ -97,7 +97,7 @@ export class ExamTypeController {
           status: 'success',
           message: 'Exam type created successfully',
           data: {
-            id: result.insertId,
+            id: examTypeId,
             name,
             description
           }
@@ -383,7 +383,7 @@ export class ExamController {
         }
 
         // Create exam
-        const result = await DatabaseHelpers.executeQuery(
+        const examId = await DatabaseHelpers.executeInsert(
           connection,
           ExamQueries.createExam,
           [
@@ -402,7 +402,7 @@ export class ExamController {
           status: 'success',
           message: 'Exam created successfully',
           data: {
-            id: result.insertId,
+            id: examId,
             exam_name,
             course_id,
             exam_type_id,
@@ -659,14 +659,14 @@ export class ExamController {
   static async getAllExams(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const institutionId = req.user?.institutionId;
-      const roleId = req.user?.roleId;
+      const isInstituteAdminOrStudent = req.user?.roles?.includes('Institute Admin') || req.user?.roles?.includes('Student');
       
       await DatabaseTransaction.executeTransaction(async (connection) => {
         let examsQuery = '';
         let queryParams: any[] = [];
 
         // Filter by institution for institute admin and students
-        if (roleId === 3 || roleId === 4) { // Institute admin or student
+        if (isInstituteAdminOrStudent) { // Institute admin or student
           examsQuery = `
             SELECT DISTINCT
               e.id,
@@ -796,7 +796,7 @@ export class ExamSectionController {
         }
 
         // Create exam section
-        const result = await DatabaseHelpers.executeQuery(
+        const sectionId = await DatabaseHelpers.executeInsert(
           connection,
           ExamSectionQueries.createExamSection,
           [exam_id, section_name, description || null, finalSortOrder, 1, req.user!.id]
@@ -806,7 +806,7 @@ export class ExamSectionController {
           status: 'success',
           message: 'Exam section created successfully',
           data: {
-            id: result.insertId,
+            id: sectionId,
             exam_id,
             section_name,
             sort_order: finalSortOrder
@@ -1110,13 +1110,31 @@ export class ExamMaterialController {
 
         // If file is provided, upload to S3
         if (file) {
-          // Validate file type
-          const allowedMimeTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'];
+          // Validate file type - support documents, images, and videos
+          const allowedMimeTypes = [
+            // Documents
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-powerpoint',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            // Images
+            'image/jpeg',
+            'image/jpg',
+            'image/png',
+            'image/gif',
+            'image/webp',
+            // Videos
+            'video/mp4',
+            'video/avi',
+            'video/quicktime',
+            'video/x-msvideo'
+          ];
           
           if (!allowedMimeTypes.includes(file.mimetype)) {
             res.status(400).json({
               status: 'error',
-              message: 'Invalid file type. Allowed: PDF, DOC, DOCX, PPT, PPTX'
+              message: 'Invalid file type. Allowed: PDF, DOC, DOCX, PPT, PPTX, JPG, JPEG, PNG, GIF, WEBP, MP4, AVI, MOV'
             });
             return;
           }
@@ -1137,7 +1155,25 @@ export class ExamMaterialController {
         }
 
         // Create material in database
-        const result = await DatabaseHelpers.executeQuery(
+        // For VIDEO_SOLUTION with file upload, use the finalPdfUrl from S3
+        // For VIDEO_SOLUTION with YOUTUBE, use content_url from body
+        // For QUESTION_PAPER with file upload, use finalPdfUrl from S3
+        const finalContentUrl = material_type === 'VIDEO_SOLUTION' && file ? finalPdfUrl : (material_type === 'VIDEO_SOLUTION' ? content_url : null);
+        const finalPdfUrlForDb = material_type === 'QUESTION_PAPER' ? finalPdfUrl : null;
+
+        console.log(`📝 createExamMaterial - About to INSERT:`, {
+          exam_section_id,
+          material_name,
+          material_type,
+          video_type: material_type === 'VIDEO_SOLUTION' ? video_type : null,
+          content_url: finalContentUrl,
+          pdf_file_url: finalPdfUrlForDb,
+          file_uploaded: !!file,
+          finalPdfUrl,
+          reqBodyContentUrl: content_url
+        });
+
+        const materialId = await DatabaseHelpers.executeInsert(
           connection,
           ExamMaterialQueries.createExamMaterial,
           [
@@ -1145,27 +1181,31 @@ export class ExamMaterialController {
             material_name,
             material_type,
             material_type === 'VIDEO_SOLUTION' ? video_type : null,
-            material_type === 'VIDEO_SOLUTION' ? content_url : null,
-            material_type === 'QUESTION_PAPER' ? finalPdfUrl : null,
+            finalContentUrl, // Use S3 URL for uploaded videos, body content_url for YouTube
+            finalPdfUrlForDb, // Use S3 URL for documents/images
             material_type === 'VIDEO_SOLUTION' ? duration : null,
             description,
             finalSortOrder,
             1,
+            file ? file.mimetype : null, // mime_type
+            file ? file.originalname : null, // file_name
             req.user!.id
           ]
         );
+
+        console.log(`✅ Material created successfully with ID: ${materialId}`);
 
         res.status(201).json({
           status: 'success',
           message: 'Exam material created successfully',
           data: {
-            id: result.insertId,
+            id: materialId,
             exam_section_id,
             material_name,
             material_type,
             video_type: material_type === 'VIDEO_SOLUTION' ? video_type : null,
-            content_url: material_type === 'VIDEO_SOLUTION' ? content_url : null,
-            pdf_file_url: material_type === 'QUESTION_PAPER' ? finalPdfUrl : null,
+            content_url: material_type === 'VIDEO_SOLUTION' ? finalContentUrl : null, // S3 URL or YouTube URL
+            pdf_file_url: material_type === 'QUESTION_PAPER' ? finalPdfUrl : null, // S3 URL for docs/images
             duration: material_type === 'VIDEO_SOLUTION' ? duration : null,
             description,
             file_size: fileSize,
@@ -1213,6 +1253,17 @@ export class ExamMaterialController {
           ExamMaterialQueries.getMaterialsBySection,
           [parseInt(sectionId as string)]
         );
+
+        // Debug: Log raw database results before processing
+        if (materials && materials.length > 0) {
+          console.log(`📊 Raw exam materials from database (section ${sectionId}):`, JSON.stringify(materials.map(m => ({
+            id: m.id,
+            material_type: m.material_type,
+            video_type: m.video_type,
+            content_url: m.content_url ? `${m.content_url.substring(0, 50)}...` : null,
+            pdf_file_url: m.pdf_file_url ? `${m.pdf_file_url.substring(0, 50)}...` : null
+          })), null, 2));
+        }
 
         // Generate signed URLs for all materials
         if (materials && materials.length > 0) {
@@ -1349,10 +1400,41 @@ export class ExamMaterialController {
         return;
       }
 
-      if (!['PDF', 'DOC', 'DOCX', 'PPT', 'PPTX'].includes(material_type)) {
+      // Allow all content types including documents, images, and videos
+      const validMaterialTypes = ['PDF', 'DOC', 'DOCX', 'PPT', 'PPTX', 'IMAGE', 'VIDEO', 'JPG', 'JPEG', 'PNG', 'GIF', 'MP4', 'AVI', 'MOV', 'WEBP'];
+      
+      if (!validMaterialTypes.includes(material_type.toUpperCase())) {
         res.status(400).json({
           status: 'error',
-          message: 'Invalid material type. Allowed types: PDF, DOC, DOCX, PPT, PPTX'
+          message: `Invalid material type. Allowed types: PDF, DOC, DOCX, PPT, PPTX, JPG, JPEG, PNG, GIF, WEBP, MP4, AVI, MOV`
+        });
+        return;
+      }
+
+      // Validate MIME type matches the declared material type
+      const mimeTypeToTypeMap: { [key: string]: string[] } = {
+        'PDF': ['application/pdf'],
+        'DOC': ['application/msword'],
+        'DOCX': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+        'PPT': ['application/vnd.ms-powerpoint'],
+        'PPTX': ['application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+        'IMAGE': ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'],
+        'JPG': ['image/jpeg', 'image/jpg'],
+        'JPEG': ['image/jpeg', 'image/jpg'],
+        'PNG': ['image/png'],
+        'GIF': ['image/gif'],
+        'WEBP': ['image/webp'],
+        'VIDEO': ['video/mp4', 'video/avi', 'video/quicktime', 'video/x-msvideo'],
+        'MP4': ['video/mp4'],
+        'AVI': ['video/avi', 'video/x-msvideo'],
+        'MOV': ['video/quicktime']
+      };
+
+      const allowedMimeTypes = mimeTypeToTypeMap[material_type.toUpperCase()] || [];
+      if (!allowedMimeTypes.includes(req.file.mimetype)) {
+        res.status(400).json({
+          status: 'error',
+          message: `File type mismatch. Expected ${material_type} file but got ${req.file.mimetype}`
         });
         return;
       }
@@ -1383,6 +1465,13 @@ export class ExamMaterialController {
           contentType: 'EXAM_MATERIAL'
         });
 
+        console.log(`🔧 After S3 upload, uploadResult:`, {
+          key: uploadResult.key,
+          url: uploadResult.url,
+          bucket: uploadResult.bucket,
+          size: uploadResult.size
+        });
+
         const maxOrder = await DatabaseHelpers.executeSelectOne(
           connection,
           ExamMaterialQueries.getMaxSortOrderForSection,
@@ -1391,36 +1480,96 @@ export class ExamMaterialController {
         const finalSortOrder = (maxOrder?.max_order || 0) + 1;
 
         // Create material record in database
-        const result = await DatabaseHelpers.executeQuery(
-          connection,
-          ExamMaterialQueries.createExamMaterial,
-          [
-            parseInt(sectionId as string),
-            material_name,
-            'QUESTION_PAPER',
-            null,
-            null,
-            uploadResult.url, // Store S3 URL as pdf_file_url
-            null,
-            `${material_type} file`,
-            finalSortOrder,
-            1,
-            req.user!.id
-          ]
-        );
+        // Determine material_type_enum based on file type
+        const upperMaterialType = material_type.toUpperCase();
+        let materialTypeEnum = 'QUESTION_PAPER';
+        let videoType: string | null = null;
+        
+        if (['IMAGE', 'JPG', 'JPEG', 'PNG', 'GIF', 'WEBP'].includes(upperMaterialType)) {
+          materialTypeEnum = 'QUESTION_PAPER'; // Store images as question paper
+        } else if (['VIDEO', 'MP4', 'AVI', 'MOV'].includes(upperMaterialType)) {
+          materialTypeEnum = 'VIDEO_SOLUTION'; // Store videos as video solution
+          videoType = 'UPLOAD'; // Mark as uploaded video
+        } else {
+          materialTypeEnum = 'QUESTION_PAPER'; // Documents and others as question paper
+        }
+
+        // Log what we're about to insert
+        const contentUrlValue = materialTypeEnum === 'VIDEO_SOLUTION' ? uploadResult.url : null;
+        const pdfFileUrlValue = materialTypeEnum === 'QUESTION_PAPER' ? uploadResult.url : null;
+        
+        console.log(`📝 About to INSERT exam material with:`, {
+          exam_section_id: parseInt(sectionId as string),
+          material_name,
+          material_type: materialTypeEnum,
+          video_type: videoType,
+          content_url: contentUrlValue,
+          pdf_file_url: pdfFileUrlValue,
+          description: `${material_type} file`,
+          sort_order: finalSortOrder,
+          status: 1,
+          created_by: req.user!.id
+        });
+
+        let materialId: number;
+        try {
+          materialId = await DatabaseHelpers.executeInsert(
+            connection,
+            ExamMaterialQueries.createExamMaterial,
+            [
+              parseInt(sectionId as string),
+              material_name,
+              materialTypeEnum,
+              videoType, // For VIDEO_SOLUTION: UPLOAD, for QUESTION_PAPER: null
+              contentUrlValue, // Store S3 URL as content_url for videos
+              pdfFileUrlValue, // Store S3 URL as pdf_file_url for documents/images
+              null,
+              `${material_type} file`,
+              finalSortOrder,
+              1,
+              req.file!.mimetype, // mime_type
+              req.file!.originalname, // file_name
+              req.user!.id
+            ]
+          );
+          console.log(`✅ Material inserted successfully with ID: ${materialId}`);
+        } catch (insertError) {
+          console.error(`❌ Database INSERT failed:`, insertError);
+          throw insertError;
+        }
+
+        // Generate signed URL for videos and images to ensure they're accessible
+        let accessibleUrl: string = uploadResult.url;
+        if (['IMAGE', 'JPG', 'JPEG', 'PNG', 'GIF', 'WEBP', 'VIDEO', 'MP4', 'AVI', 'MOV'].includes(upperMaterialType)) {
+          try {
+            // Generate signed URL with MIME type for proper streaming/display support
+            const signedUrl = await SignedUrlHelper.generateSignedUrl(uploadResult.url, 86400, req.file!.mimetype);
+            if (signedUrl) {
+              accessibleUrl = signedUrl;
+              console.log(`✅ Generated signed URL for exam material ${material_type} (${req.file!.mimetype})`);
+            } else {
+              console.warn(`⚠️ Signed URL generation returned undefined for exam material ${material_type}`);
+            }
+          } catch (urlError) {
+            console.warn(`⚠️ Failed to generate signed URL for exam material ${material_type}:`, urlError);
+          }
+        }
 
         res.status(201).json({
           status: 'success',
           message: 'Exam material file uploaded successfully',
           data: {
-            id: result.insertId,
+            id: materialId,
             exam_section_id: parseInt(sectionId as string),
             material_name,
             material_type,
-            pdf_file_url: uploadResult.url,
+            video_type: materialTypeEnum === 'VIDEO_SOLUTION' ? 'UPLOAD' : null,
+            content_url: materialTypeEnum === 'VIDEO_SOLUTION' ? accessibleUrl : null, // Return signed URL for videos
+            pdf_file_url: materialTypeEnum === 'QUESTION_PAPER' ? accessibleUrl : null, // Return signed URL for documents/images
             file_size: req.file!.size,
             file_key: uploadResult.key,
-            sort_order: finalSortOrder
+            sort_order: finalSortOrder,
+            mime_type: req.file!.mimetype // Include MIME type in response
           }
         });
       });

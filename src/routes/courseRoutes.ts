@@ -97,14 +97,8 @@ router.delete('/:courseId/sections/:sectionId', adminOnly, CourseController.dele
 // Get section contents
 router.get('/:courseId/sections/:sectionId/contents', CourseController.getSectionContents);
 
-// Create content for a section (Admin only)
-router.post('/:courseId/sections/:sectionId/contents', adminOnly, CourseController.createContent);
-
-// Update content (Admin only)
-router.put('/:courseId/sections/:sectionId/contents/:contentId', adminOnly, CourseController.updateContent);
-
 /**
- * File Upload Routes (Admin only)
+ * File Upload Routes (Admin only) - MUST come before generic POST route
  */
 
 // Upload single file as course content
@@ -123,6 +117,12 @@ router.post('/:courseId/sections/:sectionId/contents/upload',
   },
   CourseController.uploadContent
 );
+
+// Create content for a section (Admin only)
+router.post('/:courseId/sections/:sectionId/contents', adminOnly, CourseController.createContent);
+
+// Update content (Admin only)
+router.put('/:courseId/sections/:sectionId/contents/:contentId', adminOnly, CourseController.updateContent);
 
 /**
  * Content Access Routes

@@ -427,6 +427,8 @@ export async function initializeDatabase(): Promise<void> {
                 description TEXT,
                 sort_order INT DEFAULT 0,
                 status SMALLINT DEFAULT 1,
+                mime_type VARCHAR(100),
+                file_name VARCHAR(500),
                 created_by BIGINT NOT NULL,
                 updated_by BIGINT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

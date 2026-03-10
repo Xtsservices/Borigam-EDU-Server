@@ -58,6 +58,16 @@ export class S3Service {
       // Generate unique file key with descriptive names
       const fileKey = S3Service.generateFileKey(courseId, sectionId, contentType, originalName, courseName, sectionName);
 
+      console.log(`📤 S3Service.uploadFile called:`, {
+        originalName,
+        mimeType,
+        contentType,
+        courseId,
+        sectionId,
+        fileKey,
+        bufferSize: buffer.length
+      });
+
       // S3 upload parameters
       const uploadParams: AWS.S3.PutObjectRequest = {
         Bucket: S3Service.BUCKET_NAME,
@@ -79,15 +89,26 @@ export class S3Service {
       // Upload to S3
       const result = await s3.upload(uploadParams).promise();
 
-      return {
+      console.log(`✅ S3 Upload successful:`, {
+        Location: result.Location,
+        Bucket: result.Bucket,
+        Key: result.Key,
+        ETag: result.ETag
+      });
+
+      const uploadResult = {
         key: fileKey,
         url: result.Location,
         bucket: S3Service.BUCKET_NAME,
         size: buffer.length
       };
 
+      console.log(`📦 UploadResult being returned:`, uploadResult);
+
+      return uploadResult;
+
     } catch (error) {
-      console.error('Error uploading file to S3:', error);
+      console.error('❌ Error uploading file to S3:', error);
       throw new Error('Failed to upload file to storage');
     }
   }
@@ -143,23 +164,47 @@ export class S3Service {
    * Generate a pre-signed URL for secure file access
    * @param fileKey - S3 object key
    * @param expiresIn - URL expiration time in seconds (default: 1 hour)
+   * @param contentType - Optional content type for response headers (useful for video streaming)
    */
-  static async generateSignedUrl(fileKey: string, expiresIn: number = 3600): Promise<string> {
+  static async generateSignedUrl(fileKey: string, expiresIn: number = 3600, contentType?: string): Promise<string> {
     try {
+      // Validate fileKey
+      if (!fileKey || typeof fileKey !== 'string' || fileKey.trim() === '') {
+        console.error('❌ Invalid file key for signed URL:', fileKey);
+        throw new Error('Invalid file key');
+      }
+
+      // Remove leading slash if present
+      const cleanFileKey = fileKey.startsWith('/') ? fileKey.substring(1) : fileKey;
+      
       const params: AWS.S3.GetObjectRequest = {
         Bucket: S3Service.BUCKET_NAME,
-        Key: fileKey
+        Key: cleanFileKey
       };
 
-      const signedUrl = await s3.getSignedUrlPromise('getObject', {
+      // Build signed URL options
+      const signedUrlOptions: any = {
         ...params,
-        Expires: expiresIn
-      });
+        Expires: Math.min(expiresIn, 604800) // Max 7 days for S3 presigned URLs
+      };
+
+      // For video/media files, include ResponseContentType for proper streaming support
+      // AWS SDK v2 uses ResponseContentType in the params object
+      if (contentType && contentType.startsWith('video/')) {
+        signedUrlOptions.ResponseContentType = contentType;
+      }
+
+      const signedUrl = await s3.getSignedUrlPromise('getObject', signedUrlOptions);
+      console.log(`✅ Generated signed URL for ${cleanFileKey}`);
       return signedUrl;
 
     } catch (error) {
-      console.error('Error generating signed URL:', error);
-      throw new Error('Failed to generate secure access URL');
+      console.warn('⚠️ Failed to generate signed URL, using direct S3 URL:', error instanceof Error ? error.message : error);
+      // Return direct S3 URL as fallback
+      // This assumes bucket has public read access or CloudFront is configured
+      const directUrl = `${S3Service.BASE_URL}/${fileKey.startsWith('/') ? fileKey.substring(1) : fileKey}`;
+      console.log(`📍 Returning direct S3 URL as fallback: ${directUrl.substring(0, 80)}...`);
+      return directUrl;
     }
   }
 
@@ -370,5 +415,52 @@ export class S3Service {
     if (mimeType === 'text/plain') return 'TEXT';
     
     return 'OTHER';
+  }
+
+  /**
+   * Infer MIME type from filename extension
+   * Used as fallback when mime_type is null in database
+   */
+  static getMimeTypeFromFilename(filename: string): string {
+    if (!filename) return 'application/octet-stream';
+    
+    const ext = path.extname(filename).toLowerCase();
+    const mimeTypeMap: { [key: string]: string } = {
+      // Images
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.svg': 'image/svg+xml',
+      
+      // Videos
+      '.mp4': 'video/mp4',
+      '.mov': 'video/quicktime',
+      '.avi': 'video/x-msvideo',
+      '.mkv': 'video/x-matroska',
+      '.webm': 'video/webm',
+      
+      // Audio
+      '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav',
+      '.m4a': 'audio/mp4',
+      '.flac': 'audio/flac',
+      
+      // Documents
+      '.pdf': 'application/pdf',
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.ppt': 'application/vnd.ms-powerpoint',
+      '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      '.xls': 'application/vnd.ms-excel',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      '.txt': 'text/plain',
+      
+      // Default
+      '': 'application/octet-stream'
+    };
+    
+    return mimeTypeMap[ext] || 'application/octet-stream';
   }
 }
