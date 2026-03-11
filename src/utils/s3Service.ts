@@ -1,5 +1,4 @@
 import AWS from 'aws-sdk';
-import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 
 // Configure AWS
@@ -10,6 +9,15 @@ AWS.config.update({
 });
 
 const s3 = new AWS.S3();
+
+// Cache for dynamic uuid import
+let uuidModule: any = null;
+async function getUuidV4() {
+  if (!uuidModule) {
+    uuidModule = await import('uuid');
+  }
+  return uuidModule.v4();
+}
 
 interface UploadFileParams {
   buffer: Buffer;
@@ -37,13 +45,13 @@ export class S3Service {
   /**
    * Generate a unique file key for S3 storage with descriptive names
    */
-  private static generateFileKey(courseId: number, sectionId: number, contentType: string, originalName: string, courseName?: string, sectionName?: string): string {
+  private static async generateFileKey(courseId: number, sectionId: number, contentType: string, originalName: string, courseName?: string, sectionName?: string): Promise<string> {
     const fileExtension = path.extname(originalName);
     const fileName = path.basename(originalName, fileExtension);
     const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9-_]/g, '-');
     const sanitizedCourseName = courseName ? courseName.replace(/[^a-zA-Z0-9-_]/g, '-') : `course-${courseId}`;
     const sanitizedSectionName = sectionName ? sectionName.replace(/[^a-zA-Z0-9-_]/g, '-') : `section-${sectionId}`;
-    const uniqueId = uuidv4();
+    const uniqueId = await getUuidV4();
     
     return `courses/${sanitizedCourseName}-${courseId}/sections/${sanitizedSectionName}-${sectionId}/${contentType}/${sanitizedFileName}-${uniqueId}${fileExtension}`;
   }
@@ -56,7 +64,7 @@ export class S3Service {
       const { buffer, originalName, mimeType, courseId, sectionId, contentType, courseName, sectionName } = params;
 
       // Generate unique file key with descriptive names
-      const fileKey = S3Service.generateFileKey(courseId, sectionId, contentType, originalName, courseName, sectionName);
+      const fileKey = await S3Service.generateFileKey(courseId, sectionId, contentType, originalName, courseName, sectionName);
 
       console.log(`📤 S3Service.uploadFile called:`, {
         originalName,
@@ -126,7 +134,7 @@ export class S3Service {
       const fileExtension = path.extname(originalName);
       const fileName = path.basename(originalName, fileExtension);
       const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9-_]/g, '-');
-      const uniqueId = uuidv4();
+      const uniqueId = await getUuidV4();
       
       const fileKey = courseId 
         ? `courses/course-${courseId}/images/${sanitizedFileName}-${uniqueId}${fileExtension}`
