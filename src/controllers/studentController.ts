@@ -418,23 +418,42 @@ export class StudentController {
               last_name: last_name || null,
               email,
               mobile: mobile || null,
-              status
+              status,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
             },
             institution: {
               id: finalInstitutionId,
               name: institution.name
             },
             enrolledCourses: validCourses.map(course => ({
-              course_id: course.id,
-              title: course.title
+              id: course.id,
+              title: course.title,
+              description: course.description,
+              duration: course.duration,
+              category_name: course.category_name
             })),
             credentials_sent: true
           }
         });
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating student by admin:', error);
+      
+      // Check if this is a validation error (not offered course, email exists, etc.)
+      const errorMessage = error?.message || '';
+      if (errorMessage.includes('not offered') || 
+          errorMessage.includes('already in use') || 
+          errorMessage.includes('not found') ||
+          errorMessage.includes('already enrolled')) {
+        res.status(400).json({
+          status: 'error',
+          message: errorMessage
+        });
+        return;
+      }
+      
       res.status(500).json({
         status: 'error',
         message: 'Internal server error occurred while creating student'
@@ -709,17 +728,42 @@ export class StudentController {
               last_name: last_name || null,
               email,
               mobile: mobile || null,
-              institution_id: institution,
-              status: 1
+              status: 1,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
             },
-            courses: validCourses,
+            institution: {
+              id: institution,
+              name: institution
+            },
+            enrolledCourses: validCourses.map(course => ({
+              id: course.id,
+              title: course.title,
+              description: course.description,
+              duration: course.duration,
+              category_name: course.category_name
+            })),
             credentials_sent: true
           }
         });
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating student by institute admin:', error);
+      
+      // Check if this is a validation error (not offered course, email exists, etc.)
+      const errorMessage = error?.message || '';
+      if (errorMessage.includes('not offered') || 
+          errorMessage.includes('already in use') || 
+          errorMessage.includes('not found') ||
+          errorMessage.includes('already enrolled')) {
+        res.status(400).json({
+          status: 'error',
+          message: errorMessage
+        });
+        return;
+      }
+      
       res.status(500).json({
         status: 'error',
         message: 'Internal server error occurred while creating student'
@@ -1287,19 +1331,31 @@ export class StudentController {
               email: updatedStudent.email,
               mobile: updatedStudent.mobile,
               status: updatedStudent.status,
+              created_at: updatedStudent.created_at,
               updated_at: updatedStudent.updated_at
             },
             institution: institution ? {
               id: institution.id,
               name: institution.name
             } : null,
-            courses: updatedCourses
+            enrolledCourses: updatedCourses
           }
         });
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating student:', error);
+      
+      // Check if this is a validation error (not offered course, etc.)
+      const errorMessage = error?.message || '';
+      if (errorMessage.includes('not offered by') || errorMessage.includes('not found') || errorMessage.includes('already enrolled')) {
+        res.status(400).json({
+          status: 'error',
+          message: errorMessage
+        });
+        return;
+      }
+      
       res.status(500).json({
         status: 'error',
         message: 'Internal server error occurred while updating student'
@@ -1635,14 +1691,35 @@ export class StudentController {
   }
 
   private static async getStudentCourses(connection: any, studentId: number): Promise<any[]> {
-    return await DatabaseHelpers.executeSelect(
+    const courses = await DatabaseHelpers.executeSelect(
       connection,
-      `SELECT c.id, c.title, sc.enrollment_date 
+      `SELECT 
+         c.id, 
+         c.title, 
+         c.description, 
+         c.duration, 
+         cat.name as category_name,
+         c.course_image,
+         c.status,
+         sc.enrollment_date
        FROM student_courses sc 
-       JOIN courses c ON sc.course_id = c.id 
+       JOIN courses c ON sc.course_id = c.id
+       LEFT JOIN course_categories cat ON c.category_id = cat.id
        WHERE sc.student_id = ? AND sc.status = 1`,
       [studentId]
     );
+
+    // Process courses to include signed URLs for images
+    return courses.map(course => ({
+      id: course.id,
+      title: course.title,
+      description: course.description,
+      duration: course.duration,
+      category_name: course.category_name,
+      course_image: course.course_image,
+      status: course.status,
+      enrollment_date: course.enrollment_date
+    }));
   }
 
   /**

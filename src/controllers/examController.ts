@@ -93,13 +93,18 @@ export class ExamTypeController {
           [name, description || null, 1, req.user!.id]
         );
 
+        // Get the created exam type with all fields
+        const createdExamType = await DatabaseHelpers.executeSelectOne(
+          connection,
+          ExamTypeQueries.getExamTypeById,
+          [examTypeId]
+        );
+
         res.status(201).json({
           status: 'success',
           message: 'Exam type created successfully',
           data: {
-            id: examTypeId,
-            name,
-            description
+            examType: createdExamType
           }
         });
       });
@@ -398,16 +403,26 @@ export class ExamController {
           ]
         );
 
+        // Get the created exam with all details including course and exam type info
+        const createdExam = await DatabaseHelpers.executeSelectOne(
+          connection,
+          `SELECT 
+            e.id, e.exam_type_id, e.exam_name, e.description, e.duration, 
+            e.duration_unit, e.course_id, e.status, e.created_at, e.updated_at,
+            c.title as course_title,
+            et.name as exam_type_name
+           FROM exams e
+           LEFT JOIN courses c ON e.course_id = c.id
+           LEFT JOIN exam_types et ON e.exam_type_id = et.id
+           WHERE e.id = ?`,
+          [examId]
+        );
+
         res.status(201).json({
           status: 'success',
           message: 'Exam created successfully',
           data: {
-            id: examId,
-            exam_name,
-            course_id,
-            exam_type_id,
-            duration,
-            duration_unit: duration_unit || 'MINUTES'
+            exam: createdExam
           }
         });
       });
@@ -802,14 +817,18 @@ export class ExamSectionController {
           [exam_id, section_name, description || null, finalSortOrder, 1, req.user!.id]
         );
 
+        // Get the created section with all fields
+        const createdSection = await DatabaseHelpers.executeSelectOne(
+          connection,
+          ExamSectionQueries.getSectionById,
+          [sectionId]
+        );
+
         res.status(201).json({
           status: 'success',
           message: 'Exam section created successfully',
           data: {
-            id: sectionId,
-            exam_id,
-            section_name,
-            sort_order: finalSortOrder
+            section: createdSection
           }
         });
       });
@@ -1195,22 +1214,21 @@ export class ExamMaterialController {
 
         console.log(`✅ Material created successfully with ID: ${materialId}`);
 
+        // Get the created material with all fields
+        const createdMaterial = await DatabaseHelpers.executeSelectOne(
+          connection,
+          ExamMaterialQueries.getMaterialById,
+          [materialId]
+        );
+
+        // Process signed URLs
+        await processExamMaterialSignedUrls(createdMaterial);
+
         res.status(201).json({
           status: 'success',
           message: 'Exam material created successfully',
           data: {
-            id: materialId,
-            exam_section_id,
-            material_name,
-            material_type,
-            video_type: material_type === 'VIDEO_SOLUTION' ? video_type : null,
-            content_url: material_type === 'VIDEO_SOLUTION' ? finalContentUrl : null, // S3 URL or YouTube URL
-            pdf_file_url: material_type === 'QUESTION_PAPER' ? finalPdfUrl : null, // S3 URL for docs/images
-            duration: material_type === 'VIDEO_SOLUTION' ? duration : null,
-            description,
-            file_size: fileSize,
-            file_key: fileKey,
-            sort_order: finalSortOrder
+            material: createdMaterial
           }
         });
       });
@@ -1555,21 +1573,21 @@ export class ExamMaterialController {
           }
         }
 
+        // Get the created material with all fields
+        const createdMaterial = await DatabaseHelpers.executeSelectOne(
+          connection,
+          ExamMaterialQueries.getMaterialById,
+          [materialId]
+        );
+
+        // Process signed URLs
+        await processExamMaterialSignedUrls(createdMaterial);
+
         res.status(201).json({
           status: 'success',
           message: 'Exam material file uploaded successfully',
           data: {
-            id: materialId,
-            exam_section_id: parseInt(sectionId as string),
-            material_name,
-            material_type,
-            video_type: materialTypeEnum === 'VIDEO_SOLUTION' ? 'UPLOAD' : null,
-            content_url: materialTypeEnum === 'VIDEO_SOLUTION' ? accessibleUrl : null, // Return signed URL for videos
-            pdf_file_url: materialTypeEnum === 'QUESTION_PAPER' ? accessibleUrl : null, // Return signed URL for documents/images
-            file_size: req.file!.size,
-            file_key: uploadResult.key,
-            sort_order: finalSortOrder,
-            mime_type: req.file!.mimetype // Include MIME type in response
+            material: createdMaterial
           }
         });
       });
@@ -1811,11 +1829,49 @@ export class ExamViewController {
           [institution.id]
         );
 
+        // Enrich exams with sections and materials
+        const enrichedExams = await Promise.all(
+          (exams || []).map(async (exam: any) => {
+            try {
+              // Get sections for this exam
+              const sections = await DatabaseHelpers.executeSelect(
+                connection,
+                ExamSectionQueries.getSectionsByExam,
+                [exam.id]
+              );
+
+              // Get materials for each section
+              const enrichedSections = await Promise.all(
+                sections.map(async (section: any) => {
+                  const materials = await DatabaseHelpers.executeSelect(
+                    connection,
+                    ExamMaterialQueries.getMaterialsBySection,
+                    [section.id]
+                  );
+                  
+                  // Generate signed URLs for all materials
+                  for (const material of materials) {
+                    await processExamMaterialSignedUrls(material);
+                  }
+                  
+                  return { ...section, materials };
+                })
+              );
+
+              return { ...exam, sections: enrichedSections };
+            } catch (sectionError) {
+              console.error(`Error enriching exam ${exam.id}:`, sectionError);
+              // Return exam without sections if there's an error
+              return { ...exam, sections: [] };
+            }
+          })
+        );
+
         res.status(200).json({
           status: 'success',
           data: {
-            exams: exams || [],
-            total: (exams || []).length,
+            exams: enrichedExams || [],
+            total: (enrichedExams || []).length,
             institution_id: institution.id
           }
         });

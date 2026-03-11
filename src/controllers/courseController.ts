@@ -256,6 +256,22 @@ export class CourseController {
           }
         }
 
+        // Get category information
+        if (createdCourse && createdCourse.category_id) {
+          const category = await DatabaseHelpers.executeSelectOne(
+            connection,
+            CourseCategoryQueries.getCategoryById,
+            [createdCourse.category_id]
+          );
+          if (category) {
+            createdCourse.category_name = category.name;
+            createdCourse.category = category;
+          }
+        }
+
+        // Generate signed URL for course image
+        await processCourseImageSignedUrl(createdCourse);
+
         res.status(201).json({
           status: 'success',
           message: 'Course created successfully',

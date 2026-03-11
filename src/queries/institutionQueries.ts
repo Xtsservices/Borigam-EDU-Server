@@ -56,8 +56,10 @@ export class InstitutionQueries {
   static readonly getInstitutionWithCourses = `
     SELECT 
       i.id as institution_id, i.name as institution_name, i.email, i.phone, i.address,
-      i.created_at as institution_created_at,
+      i.status, i.created_by, i.updated_by,
+      i.created_at as institution_created_at, i.updated_at as institution_updated_at,
       c.id as course_id, c.title as course_title, c.description as course_description,
+      c.course_image, c.duration,
       cc.name as category_name,
       ic.created_at as course_added_at
     FROM institutions i

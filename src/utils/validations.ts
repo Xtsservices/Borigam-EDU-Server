@@ -353,7 +353,14 @@ export const institutionValidation = {
     email: Joi.string().email().max(150).optional(),
     phone: Joi.string().pattern(/^[0-9]{10}$/).optional(),
     address: Joi.string().min(10).max(1000).optional(),
-    status: Joi.number().integer().min(0).max(1).optional()
+    status: Joi.number().integer().min(0).max(1).optional(),
+    course_ids: Joi.array().items(
+      Joi.number().integer().positive().messages({
+        'number.positive': 'Course ID must be a positive integer'
+      })
+    ).min(1).optional().messages({
+      'array.min': 'At least one course must be selected if courses are provided'
+    })
   }),
 
   // Update institution courses validation
