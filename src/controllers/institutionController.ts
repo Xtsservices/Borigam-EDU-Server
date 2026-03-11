@@ -53,7 +53,9 @@ interface UpdateInstitutionRequest extends AuthenticatedRequest {
 
 interface UpdateInstitutionCoursesRequest extends AuthenticatedRequest {
   body: {
-    course_ids: number[];
+    course_ids?: number[]; // Replace all courses
+    add_course_ids?: number[]; // Add courses to existing ones
+    remove_course_ids?: number[]; // Remove specific courses
   };
 }
 
@@ -451,13 +453,19 @@ export class InstitutionController {
           email: institutionData[0].email,
           phone: institutionData[0].phone,
           address: institutionData[0].address,
+          status: institutionData[0].status,
+          created_by: institutionData[0].created_by,
+          updated_by: institutionData[0].updated_by,
           created_at: institutionData[0].institution_created_at,
+          updated_at: institutionData[0].institution_updated_at,
           courses: institutionData
             .filter(row => row.course_id) // Filter out null courses
             .map(row => ({
               id: row.course_id,
               title: row.course_title,
               description: row.course_description,
+              course_image: row.course_image,
+              duration: row.duration,
               category_name: row.category_name,
               added_at: row.course_added_at
             }))
@@ -491,6 +499,7 @@ export class InstitutionController {
 
       const institutionId = parseInt(req.params.id as string);
       const { name, email, phone, address, status } = req.body;
+      const course_ids = (req.body as any).course_ids;
 
       // Validate institution ID
       const idValidation = validateData({ id: institutionId }, Joi.object({ id: institutionValidation.institutionId }));
@@ -505,7 +514,7 @@ export class InstitutionController {
 
       // Validate input data
       const validation = validateData(
-        { name, email, phone, address, status }, 
+        { name, email, phone, address, status, course_ids }, 
         institutionValidation.updateInstitution
       );
       
@@ -599,7 +608,7 @@ export class InstitutionController {
           }
         }
 
-        // Update institution
+        // Update institution basic info
         await DatabaseHelpers.executeQuery(
           connection,
           InstitutionQueries.updateInstitution,
@@ -612,6 +621,42 @@ export class InstitutionController {
             institutionId
           ]
         );
+
+        // Handle course updates if course_ids are provided
+        if (course_ids && Array.isArray(course_ids) && course_ids.length > 0) {
+          // Validate all course IDs exist
+          for (const courseId of course_ids) {
+            const course = await DatabaseHelpers.executeSelectOne(
+              connection,
+              CourseQueries.getCourseById,
+              [courseId]
+            );
+
+            if (!course) {
+              res.status(400).json({
+                status: 'error',
+                message: `Course with ID ${courseId} not found`
+              });
+              return;
+            }
+          }
+
+          // Remove all existing course associations
+          await DatabaseHelpers.executeQuery(
+            connection,
+            InstitutionCoursesQueries.updateInstitutionCourses,
+            [req.user!.id, institutionId]
+          );
+
+          // Add new course associations
+          for (const courseId of course_ids) {
+            await DatabaseHelpers.executeQuery(
+              connection,
+              InstitutionCoursesQueries.upsertCourseToInstitution,
+              [institutionId, courseId, req.user!.id, req.user!.id]
+            );
+          }
+        }
 
         // Update admin user if email or name changed
         if (email && email !== institution.email) {
@@ -663,12 +708,45 @@ export class InstitutionController {
           }
         }
 
-        // Get updated institution
-        const updatedInstitution = await DatabaseHelpers.executeSelectOne(
+        // Get updated institution with courses
+        const institutionData = await DatabaseHelpers.executeSelect(
           connection,
-          InstitutionQueries.getInstitutionById,
+          InstitutionQueries.getInstitutionWithCourses,
           [institutionId]
         );
+
+        if (!institutionData.length) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Institution not found after update'
+          });
+          return;
+        }
+
+        // Process the data to group courses under institution
+        const updatedInstitution = {
+          id: institutionData[0].institution_id,
+          name: institutionData[0].institution_name,
+          email: institutionData[0].email,
+          phone: institutionData[0].phone,
+          address: institutionData[0].address,
+          status: institutionData[0].status,
+          created_by: institutionData[0].created_by,
+          updated_by: institutionData[0].updated_by,
+          created_at: institutionData[0].institution_created_at,
+          updated_at: institutionData[0].institution_updated_at,
+          courses: institutionData
+            .filter(row => row.course_id) // Filter out null courses
+            .map(row => ({
+              id: row.course_id,
+              title: row.course_title,
+              description: row.course_description,
+              course_image: row.course_image,
+              duration: row.duration,
+              category_name: row.category_name,
+              added_at: row.course_added_at
+            }))
+        };
 
         res.status(200).json({
           status: 'success',
@@ -776,6 +854,14 @@ export class InstitutionController {
    * Update institution courses
    * PUT /api/institutions/:id/courses
    */
+  /**
+   * Update institution courses
+   * PUT /api/institutions/:id/courses
+   * Supports three operations:
+   * - course_ids: Replace all courses
+   * - add_course_ids: Add new courses to existing ones
+   * - remove_course_ids: Remove specific courses
+   */
   static async updateInstitutionCourses(req: UpdateInstitutionCoursesRequest, res: Response): Promise<void> {
     try {
       // Check admin role
@@ -784,7 +870,7 @@ export class InstitutionController {
       }
 
       const institutionId = parseInt(req.params.id as string);
-      const { course_ids } = req.body;
+      const { course_ids, add_course_ids, remove_course_ids } = req.body;
 
       // Validate institution ID
       const idValidation = validateData({ id: institutionId }, Joi.object({ id: institutionValidation.institutionId }));
@@ -797,17 +883,20 @@ export class InstitutionController {
         return;
       }
 
-      // Validate course IDs
-      const validation = validateData(
-        { course_ids }, 
-        institutionValidation.updateInstitutionCourses
-      );
-      
-      if (!validation.isValid) {
+      // Validate that only one course operation is provided
+      const courseOperations = [course_ids, add_course_ids, remove_course_ids].filter(op => op && op.length > 0);
+      if (courseOperations.length > 1) {
         res.status(400).json({
           status: 'error',
-          message: 'Validation failed',
-          errors: validation.errors
+          message: 'Cannot perform multiple course operations simultaneously. Use either course_ids (replace all), add_course_ids, or remove_course_ids.'
+        });
+        return;
+      }
+
+      if (courseOperations.length === 0) {
+        res.status(400).json({
+          status: 'error',
+          message: 'Provide at least one of: course_ids, add_course_ids, or remove_course_ids'
         });
         return;
       }
@@ -829,39 +918,93 @@ export class InstitutionController {
           return;
         }
 
-        // Validate all course IDs exist
-        const validCourses = [];
-        for (const courseId of course_ids) {
-          const course = await DatabaseHelpers.executeSelectOne(
-            connection,
-            CourseQueries.getCourseById,
-            [courseId]
-          );
+        if (course_ids && course_ids.length > 0) {
+          // Replace all courses
+          
+          // Validate all course IDs exist
+          const validCourses = [];
+          for (const courseId of course_ids) {
+            const course = await DatabaseHelpers.executeSelectOne(
+              connection,
+              CourseQueries.getCourseById,
+              [courseId]
+            );
 
-          if (!course) {
-            res.status(400).json({
-              status: 'error',
-              message: `Course with ID ${courseId} not found`
-            });
-            return;
+            if (!course) {
+              res.status(400).json({
+                status: 'error',
+                message: `Course with ID ${courseId} not found`
+              });
+              return;
+            }
+            validCourses.push(course);
           }
-          validCourses.push(course);
-        }
 
-        // Remove all existing course associations
-        await DatabaseHelpers.executeQuery(
-          connection,
-          InstitutionCoursesQueries.updateInstitutionCourses,
-          [req.user!.id, institutionId]
-        );
-
-        // Add new course associations using upsert to handle previously soft-deleted records
-        for (const courseId of course_ids) {
+          // Remove all existing course associations
           await DatabaseHelpers.executeQuery(
             connection,
-            InstitutionCoursesQueries.upsertCourseToInstitution,
-            [institutionId, courseId, req.user!.id, req.user!.id]
+            InstitutionCoursesQueries.updateInstitutionCourses,
+            [req.user!.id, institutionId]
           );
+
+          // Add new course associations using upsert to handle previously soft-deleted records
+          for (const courseId of course_ids) {
+            await DatabaseHelpers.executeQuery(
+              connection,
+              InstitutionCoursesQueries.upsertCourseToInstitution,
+              [institutionId, courseId, req.user!.id, req.user!.id]
+            );
+          }
+
+        } else if (add_course_ids && add_course_ids.length > 0) {
+          // Add courses to existing ones
+          
+          // Validate all course IDs exist
+          for (const courseId of add_course_ids) {
+            const course = await DatabaseHelpers.executeSelectOne(
+              connection,
+              CourseQueries.getCourseById,
+              [courseId]
+            );
+
+            if (!course) {
+              res.status(400).json({
+                status: 'error',
+                message: `Course with ID ${courseId} not found`
+              });
+              return;
+            }
+          }
+
+          // Add each course (skip if already exists)
+          for (const courseId of add_course_ids) {
+            // Check if course is already assigned (active status)
+            const existingAssignment = await DatabaseHelpers.executeSelectOne(
+              connection,
+              InstitutionCoursesQueries.checkCourseAssignment,
+              [institutionId, courseId]
+            );
+
+            if (!existingAssignment) {
+              // Add or reactivate course assignment using upsert
+              await DatabaseHelpers.executeQuery(
+                connection,
+                InstitutionCoursesQueries.upsertCourseToInstitution,
+                [institutionId, courseId, req.user!.id, req.user!.id]
+              );
+            }
+          }
+
+        } else if (remove_course_ids && remove_course_ids.length > 0) {
+          // Remove specified courses
+          
+          for (const courseId of remove_course_ids) {
+            await DatabaseHelpers.executeQuery(
+              connection,
+              'UPDATE institution_courses SET status = 0, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE institution_id = ? AND course_id = ?',
+              [req.user!.id, institutionId, courseId]
+            );
+          }
         }
 
         // Get updated institution courses
@@ -984,13 +1127,51 @@ export class InstitutionController {
           [institutionId, course_id, req.user!.id, req.user!.id]
         );
 
+        // Get updated institution with all courses
+        const institutionData = await DatabaseHelpers.executeSelect(
+          connection,
+          InstitutionQueries.getInstitutionWithCourses,
+          [institutionId]
+        );
+
+        if (!institutionData.length) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Institution not found after adding course'
+          });
+          return;
+        }
+
+        // Process the data to group courses under institution
+        const updatedInstitution = {
+          id: institutionData[0].institution_id,
+          name: institutionData[0].institution_name,
+          email: institutionData[0].email,
+          phone: institutionData[0].phone,
+          address: institutionData[0].address,
+          status: institutionData[0].status,
+          created_by: institutionData[0].created_by,
+          updated_by: institutionData[0].updated_by,
+          created_at: institutionData[0].institution_created_at,
+          updated_at: institutionData[0].institution_updated_at,
+          courses: institutionData
+            .filter(row => row.course_id) // Filter out null courses
+            .map(row => ({
+              id: row.course_id,
+              title: row.course_title,
+              description: row.course_description,
+              course_image: row.course_image,
+              duration: row.duration,
+              category_name: row.category_name,
+              added_at: row.course_added_at
+            }))
+        };
+
         res.status(201).json({
           status: 'success',
           message: 'Course added to institution successfully',
           data: {
-            institution_id: institutionId,
-            course_id,
-            course_title: course.title
+            institution: updatedInstitution
           }
         });
       });
@@ -1055,9 +1236,52 @@ export class InstitutionController {
           [req.user!.id, institutionId, courseId]
         );
 
+        // Get updated institution with remaining courses
+        const institutionData = await DatabaseHelpers.executeSelect(
+          connection,
+          InstitutionQueries.getInstitutionWithCourses,
+          [institutionId]
+        );
+
+        if (!institutionData.length) {
+          res.status(404).json({
+            status: 'error',
+            message: 'Institution not found after removing course'
+          });
+          return;
+        }
+
+        // Process the data to group courses under institution
+        const updatedInstitution = {
+          id: institutionData[0].institution_id,
+          name: institutionData[0].institution_name,
+          email: institutionData[0].email,
+          phone: institutionData[0].phone,
+          address: institutionData[0].address,
+          status: institutionData[0].status,
+          created_by: institutionData[0].created_by,
+          updated_by: institutionData[0].updated_by,
+          created_at: institutionData[0].institution_created_at,
+          updated_at: institutionData[0].institution_updated_at,
+          courses: institutionData
+            .filter(row => row.course_id) // Filter out null courses
+            .map(row => ({
+              id: row.course_id,
+              title: row.course_title,
+              description: row.course_description,
+              course_image: row.course_image,
+              duration: row.duration,
+              category_name: row.category_name,
+              added_at: row.course_added_at
+            }))
+        };
+
         res.status(200).json({
           status: 'success',
-          message: 'Course removed from institution successfully'
+          message: 'Course removed from institution successfully',
+          data: {
+            institution: updatedInstitution
+          }
         });
       });
 
