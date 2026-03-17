@@ -17,6 +17,7 @@ import {
 import { InstitutionStudentQueries } from '../queries/studentQueries';
 import { DatabaseTransaction, DatabaseHelpers } from '../utils/database';
 import { S3Service } from '../utils/s3Service';
+import { CompressionService } from '../utils/compressionService';
 import { FileUploadValidator, handleMulterError } from '../utils/uploadMiddleware';
 import { SignedUrlHelper } from '../utils/signedUrlHelper';
 
@@ -373,6 +374,12 @@ export class CourseController {
             // Generate signed URLs for all content in this section
             for (const content of section.contents) {
               await processContentSignedUrls(content);
+              
+              // Generate Office Online preview URL for Office documents
+              if (content.content_url && (content.content_type === 'DOCX' || content.content_type === 'DOC' || content.content_type === 'PDF')) {
+                const encodedUrl = encodeURIComponent(content.content_url);
+                content.office_online_url = `https://view.officeapps.live.com/op/view.aspx?src=${encodedUrl}`;
+              }
             }
           }
 
@@ -469,6 +476,18 @@ export class CourseController {
           // Generate signed URLs for all content in this section
           for (const content of section.contents) {
             await processContentSignedUrls(content);
+            
+            // Add access_url field for easier consumption by admin/other modules
+            // This mirrors the response format from getContentAccess endpoint
+            if (content.content_type !== 'TEXT' && content.content_url) {
+              content.access_url = content.content_url;
+            }
+            
+            // Generate Office Online preview URL for Office documents
+            if (content.content_url && (content.content_type === 'DOCX' || content.content_type === 'DOC' || content.content_type === 'PDF')) {
+              const encodedUrl = encodeURIComponent(content.content_url);
+              content.office_online_url = `https://view.officeapps.live.com/op/view.aspx?src=${encodedUrl}`;
+            }
           }
         }
 
@@ -1069,7 +1088,29 @@ export class CourseController {
 
         // Generate signed URLs for all content
         for (const content of contentsWithProgress) {
+          // Automatically handles longer expiration for videos (24 hours)
           await processContentSignedUrls(content);
+          
+          // Ensure content_url is available for all roles (not just for download via /access endpoint)
+          // This is critical for admin module to preview/play videos
+          if (!content.access_url && content.content_url) {
+            content.access_url = content.content_url;
+          }
+          
+          // Generate Office Online preview URL for Office documents
+          if (content.access_url && (content.content_type === 'DOCX' || content.content_type === 'DOC' || content.content_type === 'PDF')) {
+            const encodedUrl = encodeURIComponent(content.access_url);
+            content.office_online_url = `https://view.officeapps.live.com/op/view.aspx?src=${encodedUrl}`;
+            console.log(`📄 Generated Office Online preview URL for ${content.title} (${content.content_type})`);
+          }
+          
+          // Debug logging for video access
+          if (content.content_type === 'VIDEO' && content.access_url) {
+            console.log(`📹 VIDEO content accessible for ${req.user?.roles?.[0] || 'Unknown'}: ${content.title} (ID: ${content.id})`);
+            console.log(`   - MIME Type: ${content.mime_type}`);
+            console.log(`   - File: ${content.file_name}`);
+            console.log(`   - URL starts with: ${content.access_url.substring(0, 50)}...`);
+          }
         }
 
         res.status(200).json({
@@ -1135,6 +1176,16 @@ export class CourseController {
 
       // Handle both content_text and content_data field names (content_data is alternative field name)
       const finalContentText = content_text || (req.body as any).content_data;
+      
+      // Convert form data strings to proper types
+      let finalIsFree = typeof is_free === 'string' ? (is_free === 'true' ? 1 : 0) : (is_free ? 1 : 0);
+      let finalDuration = typeof duration === 'string' ? parseInt(duration, 10) : duration;
+      let finalSortOrder = typeof sort_order === 'string' ? parseInt(sort_order, 10) : (typeof sort_order === 'number' ? sort_order : undefined);
+      
+      // Ensure finalSortOrder is a number for proper comparison
+      if (finalSortOrder === undefined || isNaN(finalSortOrder)) {
+        finalSortOrder = 0;
+      }
 
       if (isNaN(courseId) || isNaN(sectionId)) {
         res.status(400).json({
@@ -1204,6 +1255,18 @@ export class CourseController {
           return;
         }
 
+        // Auto-assign sort_order if not provided: get the highest sort_order in this section + 1
+        if (finalSortOrder === 0) {
+          const maxSortResult = await DatabaseHelpers.executeSelectOne(
+            connection,
+            `SELECT MAX(sort_order) as max_sort FROM course_contents 
+             WHERE section_id = ? AND status = 1`,
+            [sectionId]
+          );
+          finalSortOrder = (maxSortResult?.max_sort || 0) + 1;
+          console.log(`🔢 Auto-assigned sort_order: ${finalSortOrder} for new content in section ${sectionId}`);
+        }
+
         // Create the content
         const contentId = await DatabaseHelpers.executeInsert(
           connection,
@@ -1220,9 +1283,9 @@ export class CourseController {
             file_name || null,
             file_size || null,
             mime_type || null,
-            duration || 0,
-            sort_order || 0,
-            is_free || false,
+            finalDuration || 0,
+            finalSortOrder,
+            finalIsFree,
             req.user?.id || null,
             req.user?.id || null
           ]
@@ -1294,7 +1357,9 @@ export class CourseController {
       }
 
       // Validate file
-      const fileErrors = FileUploadValidator.getValidationErrors(file, content_type);
+      // Normalize content_type to uppercase for consistent validation
+      const normalizedUploadContentType = content_type?.toUpperCase();
+      const fileErrors = FileUploadValidator.getValidationErrors(file, normalizedUploadContentType);
       if (fileErrors.length > 0) {
         res.status(400).json({
           status: 'error',
@@ -1349,8 +1414,9 @@ export class CourseController {
         }
 
         try {
-          // Upload file to S3 with descriptive names
-          const uploadResult = await S3Service.uploadFile({
+          // Upload file to S3 with compression
+          console.log(`🚀 Starting file upload with compression for: ${file.originalname}`);
+          const uploadWithCompressionResult = await S3Service.uploadFileWithCompression({
             buffer: file.buffer,
             originalName: file.originalname,
             mimeType: file.mimetype,
@@ -1361,7 +1427,12 @@ export class CourseController {
             sectionName: section.title
           });
 
-          // Create content record in database
+          const uploadResult = uploadWithCompressionResult.uploadResult;
+          const compressionInfo = uploadWithCompressionResult.compressionInfo;
+
+          // Create content record in database with compressed file information
+          const detectedContentType = S3Service.getFileTypeCategory(file.mimetype);
+          console.log(`📝 Creating content with detectedContentType: ${detectedContentType} (mimeType: ${file.mimetype})`);
           const contentId = await DatabaseHelpers.executeInsert(
             connection,
             CourseContentQueries.createContent,
@@ -1370,18 +1441,17 @@ export class CourseController {
               sectionId,
               title || null,
               description || null,
-              S3Service.getFileTypeCategory(file.mimetype), // Use detected content type
-              uploadResult.url || null, // Store full S3 URL
-              null, // content_text
-              null, // youtube_url (not applicable for file uploads)
-              FileUploadValidator.sanitizeFileName(file.originalname) || null, // sanitized file_name
-              file.size || null, // file_size
-              file.mimetype || null, // mime_type
-              parseInt(duration) || 0, // duration
-              parseInt(sort_order) || 0, // sort_order
-              contentData.is_free || false, // is_free
-              req.user?.id || null, // created_by
-              req.user?.id || null  // updated_by
+              detectedContentType,
+              uploadResult.url || null, // S3 URL of compressed file
+              null, // file_path
+              compressionInfo.compressedSize || file.size, // Store compressed file size
+              compressionInfo.mimeType || file.mimetype,
+              FileUploadValidator.sanitizeFileName(file.originalname) || null,
+              parseInt(duration) || 0,
+              parseInt(sort_order) || 0,
+              contentData.is_free || false,
+              req.user?.id || null,
+              req.user?.id || null
             ]
           );
 
@@ -1395,24 +1465,33 @@ export class CourseController {
           // Generate signed URLs for the uploaded content
           await processContentSignedUrls(createdContent);
 
+          console.log(`✅ Content created successfully with compression:`);
+          console.log(`   Original Size: ${CompressionService.formatBytes(file.size)}`);
+          console.log(`   Compressed Size: ${CompressionService.formatBytes(compressionInfo.compressedSize)}`);
+          console.log(`   Saved: ${compressionInfo.compressionRatio}%`);
+
           res.status(201).json({
             status: 'success',
-            message: 'Content uploaded successfully',
+            message: 'Content uploaded and compressed successfully',
             data: {
               content: {
                 ...createdContent,
-                formatted_size: S3Service.formatFileSize(file.size)
+                formatted_size: CompressionService.formatBytes(compressionInfo.compressedSize)
               },
               upload_details: {
                 s3_key: uploadResult.key,
-                file_size: S3Service.formatFileSize(file.size),
-                content_type_detected: S3Service.getFileTypeCategory(file.mimetype)
+                original_size: CompressionService.formatBytes(file.size),
+                compressed_size: CompressionService.formatBytes(compressionInfo.compressedSize),
+                compression_ratio: `${compressionInfo.compressionRatio}%`,
+                compression_time_ms: compressionInfo.compressionTime,
+                content_type_detected: S3Service.getFileTypeCategory(file.mimetype),
+                storage_saved: CompressionService.formatBytes(file.size - compressionInfo.compressedSize)
               }
             }
           });
 
         } catch (uploadError) {
-          console.error('File upload error:', uploadError);
+          console.error('File upload with compression error:', uploadError);
           res.status(500).json({
             status: 'error',
             message: 'Failed to upload file to storage'
@@ -1547,6 +1626,15 @@ export class CourseController {
           accessUrl = null; // Text content is returned in content_text field
         }
 
+        // Generate Office Online preview URL for Office documents
+        let officeOnlineUrl = null;
+        if (accessUrl && (content.content_type === 'DOCX' || content.content_type === 'DOC' || content.content_type === 'PDF')) {
+          // Encode the S3 URL for Office Online viewer
+          const encodedUrl = encodeURIComponent(accessUrl);
+          officeOnlineUrl = `https://view.officeapps.live.com/op/view.aspx?src=${encodedUrl}`;
+          console.log(`📄 Generated Office Online preview URL for ${content.content_type}`);
+        }
+
         res.status(200).json({
           status: 'success',
           message: 'Content access granted',
@@ -1557,6 +1645,7 @@ export class CourseController {
               description: content.description,
               content_type: content.content_type,
               access_url: accessUrl,
+              office_online_url: officeOnlineUrl,
               progress: studentProgress ? {
                 is_accessed: studentProgress.is_accessed || false,
                 is_completed: studentProgress.is_completed || false,
@@ -1950,16 +2039,17 @@ export class CourseController {
       const sectionId = parseInt(req.params.sectionId as string);
       const contentId = parseInt(req.params.contentId as string);
       
-      // Check if request body exists
-      if (!req.body) {
+      // Validate IDs
+      if (isNaN(courseId) || isNaN(sectionId) || isNaN(contentId)) {
         res.status(400).json({
           status: 'error',
-          message: 'Request body is missing. Please provide JSON data with Content-Type: application/json'
+          message: 'Invalid course ID, section ID, or content ID'
         });
         return;
       }
-      
-      const { 
+
+      // Extract form fields and file
+      let { 
         title, 
         description, 
         content_type, 
@@ -1968,12 +2058,34 @@ export class CourseController {
         sort_order, 
         is_free, 
         duration 
-      } = req.body;
-
-      if (isNaN(courseId) || isNaN(sectionId) || isNaN(contentId)) {
+      } = req.body || {};
+      
+      // Handle both content_text and content_data field names (content_data is alternative field name)
+      const finalContentText = content_text || (req.body as any).content_data;
+      
+      // Convert is_free from string to integer (form data sends 'true'/'false' as strings)
+      if (is_free !== undefined) {
+        is_free = typeof is_free === 'string' ? (is_free === 'true' ? 1 : 0) : (is_free ? 1 : 0);
+      }
+      
+      // Convert sort_order to integer
+      if (sort_order !== undefined) {
+        sort_order = parseInt(sort_order as string, 10);
+      }
+      
+      // Convert duration to integer
+      if (duration !== undefined) {
+        duration = parseInt(duration as string, 10);
+      }
+      
+      // Check if at least one field is provided for update
+      const hasUpdates = title || description || content_type || content_url || finalContentText || 
+                        sort_order !== undefined || is_free !== undefined || duration || req.file;
+      
+      if (!hasUpdates) {
         res.status(400).json({
           status: 'error',
-          message: 'Invalid course ID, section ID, or content ID'
+          message: 'Request body is missing. Please provide at least one field to update (title, description, content_type, content_url, content_text, sort_order, is_free, duration, or file)'
         });
         return;
       }
@@ -1996,23 +2108,101 @@ export class CourseController {
           return;
         }
 
-        // Update content
+        // Handle file upload if provided
+        let newContentUrl = content_url || existingContent.content_url;
+        let newMimeType = existingContent.mime_type;
+        let newFileSize = existingContent.file_size;
+        let newFileName = existingContent.file_name;
+        let finalContentType = (content_type || existingContent.content_type)?.toUpperCase();
+
+        if (req.file) {
+          // Validate file before uploading
+          // Normalize content_type to uppercase for consistent validation
+          const normalizedContentType = (content_type || existingContent.content_type)?.toUpperCase();
+          const fileErrors = FileUploadValidator.getValidationErrors(req.file, normalizedContentType);
+          if (fileErrors.length > 0) {
+            res.status(400).json({
+              status: 'error',
+              message: 'File validation failed',
+              errors: fileErrors
+            });
+            return;
+          }
+
+          try {
+            // Get section info for S3 organization
+            const section = await DatabaseHelpers.executeSelectOne(
+              connection,
+              `SELECT cs.*, c.title as course_name FROM course_sections cs
+               JOIN courses c ON cs.course_id = c.id
+               WHERE cs.id = ? AND cs.course_id = ? AND cs.status = 1`,
+              [sectionId, courseId]
+            );
+
+            if (!section) {
+              res.status(404).json({
+                status: 'error',
+                message: 'Section not found'
+              });
+              return;
+            }
+
+            // Detect actual content type from MIME type (e.g., 'file' → 'PDF' or 'IMAGE')
+            finalContentType = FileUploadValidator.detectDatabaseContentType(
+              req.file.mimetype,
+              normalizedContentType
+            );
+
+            // Upload new file to S3
+            const uploadResult = await S3Service.uploadFile({
+              buffer: req.file.buffer,
+              originalName: req.file.originalname,
+              mimeType: req.file.mimetype,
+              courseId,
+              sectionId,
+              contentType: finalContentType,
+              courseName: section.course_name,
+              sectionName: section.title
+            });
+
+            newContentUrl = uploadResult.url;
+            newMimeType = req.file.mimetype;
+            newFileSize = req.file.size;
+            newFileName = FileUploadValidator.sanitizeFileName(req.file.originalname) || existingContent.file_name;
+          } catch (uploadError) {
+            console.error('Error uploading file to S3:', uploadError);
+            res.status(500).json({
+              status: 'error',
+              message: 'Failed to upload file',
+              details: uploadError instanceof Error ? uploadError.message : 'Unknown error'
+            });
+            return;
+          }
+        }
+
+        // Update content with detected content type
+        console.log(`📝 Updating content with finalContentType: ${finalContentType} (original: ${content_type})`);
+        console.log(`📝 Content text update: ${finalContentText ? `[${finalContentText.length} chars]` : 'unchanged'}`);
         await DatabaseHelpers.executeQuery(
           connection,
           `UPDATE course_contents 
            SET title = ?, description = ?, content_type = ?, content_url = ?, 
                content_text = ?, sort_order = ?, is_free = ?, duration = ?,
+               file_name = ?, file_size = ?, mime_type = ?,
                updated_by = ?, updated_at = CURRENT_TIMESTAMP
            WHERE id = ? AND section_id = ? AND course_id = ?`,
           [
             title || existingContent.title,
             description || existingContent.description,
-            content_type || existingContent.content_type,
-            content_url || existingContent.content_url,
-            content_text || existingContent.content_text,
-            sort_order || existingContent.sort_order,
+            finalContentType,
+            newContentUrl,
+            finalContentText || existingContent.content_text,
+            sort_order !== undefined ? sort_order : existingContent.sort_order,
             is_free !== undefined ? is_free : existingContent.is_free,
             duration || existingContent.duration,
+            newFileName,
+            newFileSize,
+            newMimeType,
             req.user?.id,
             contentId,
             sectionId,
@@ -2106,14 +2296,14 @@ export class CourseController {
         const progress = await DatabaseHelpers.executeSelect(
           connection,
           `SELECT cc.id, cc.title, cc.content_type, cs.title as section_title,
-                  cc.sequence_number, cc.duration,
+                  cc.sort_order, cc.duration,
                   scp.is_accessed, scp.is_completed, scp.accessed_at, scp.completed_at
            FROM course_contents cc
            JOIN course_sections cs ON cc.section_id = cs.id
            LEFT JOIN student_content_progress scp ON cc.id = scp.content_id 
                      AND scp.student_id = ? AND scp.course_id = ?
            WHERE cc.course_id = ? AND cc.status = 1
-           ORDER BY cs.sort_order ASC, cc.sequence_number ASC`,
+           ORDER BY cs.sort_order ASC, cc.sort_order ASC`,
           [student.id, courseId, courseId]
         );
 
@@ -2205,14 +2395,14 @@ export class CourseController {
         const progress = await DatabaseHelpers.executeSelect(
           connection,
           `SELECT cc.id, cc.title, cc.content_type, cs.title as section_title,
-                  cc.sequence_number, cc.duration,
+                  cc.sort_order, cc.duration,
                   scp.is_accessed, scp.is_completed, scp.accessed_at, scp.completed_at
            FROM course_contents cc
            JOIN course_sections cs ON cc.section_id = cs.id
            LEFT JOIN student_content_progress scp ON cc.id = scp.content_id 
                      AND scp.student_id = ? AND scp.course_id = ?
            WHERE cc.course_id = ? AND cc.status = 1
-           ORDER BY cs.sort_order ASC, cc.sequence_number ASC`,
+           ORDER BY cs.sort_order ASC, cc.sort_order ASC`,
           [studentId, courseId, courseId]
         );
 
@@ -2352,10 +2542,11 @@ export class CourseController {
           ? content_type.toUpperCase() 
           : contentTypeEnum;
 
-        // Upload to S3
+        // Upload to S3 with compression
+        console.log(`🚀 Starting file upload with compression for: ${req.file!.originalname}`);
         const sectionIdNum = typeof section_id === 'string' ? parseInt(section_id) : section_id;
         
-        const s3Result = await S3Service.uploadFile({
+        const uploadWithCompressionResult = await S3Service.uploadFileWithCompression({
           buffer: req.file!.buffer,
           originalName: req.file!.originalname,
           mimeType: req.file!.mimetype,
@@ -2366,12 +2557,26 @@ export class CourseController {
           sectionName: `Section-${sectionIdNum}`
         });
 
-        // Insert content record
+        const s3Result = uploadWithCompressionResult.uploadResult;
+        const compressionInfo = uploadWithCompressionResult.compressionInfo;
+
+        // Auto-assign sort_order if not provided: get the highest sort_order in this section + 1
+        let autoSortOrder = 0;
+        const maxSortResult = await DatabaseHelpers.executeSelectOne(
+          connection,
+          `SELECT MAX(sort_order) as max_sort FROM course_contents 
+           WHERE section_id = ? AND status = 1`,
+          [sectionIdNum]
+        );
+        autoSortOrder = (maxSortResult?.max_sort || 0) + 1;
+        console.log(`🔢 Auto-assigned sort_order: ${autoSortOrder} for uploaded content in section ${sectionIdNum}`);
+
+        // Insert content record with compressed file information
         const query = `
           INSERT INTO course_contents (
             course_id, section_id, title, content_type, content_url, description, 
-            file_name, file_size, mime_type, created_by, updated_by
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            file_name, file_size, mime_type, sort_order, created_by, updated_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
 
         const result = await DatabaseHelpers.executeQuery(
@@ -2381,27 +2586,40 @@ export class CourseController {
             courseId,
             parseInt(section_id),
             title || req.file!.originalname,
-            finalContentType, // Use the validated ENUM value
-            s3Result.url, // Use s3Result.url instead of s3Result.Location
+            finalContentType,
+            s3Result.url, // S3 URL of compressed file
             description || '',
             req.file!.originalname,
-            req.file!.size,
-            req.file!.mimetype, // Store MIME type for proper video streaming
+            compressionInfo.compressedSize, // Store compressed file size
+            compressionInfo.mimeType,
+            autoSortOrder,
             req.user?.id,
             req.user?.id
           ]
         );
+
+        // Fetch the full created content record including sort_order
+        const createdContent = await DatabaseHelpers.executeSelectOne(
+          connection,
+          `SELECT * FROM course_contents WHERE id = ?`,
+          [result.insertId]
+        );
+
+        console.log(`✅ Content created successfully with compression:`);
+        console.log(`   Original Size: ${CompressionService.formatBytes(req.file!.size)}`);
+        console.log(`   Compressed Size: ${CompressionService.formatBytes(compressionInfo.compressedSize)}`);
+        console.log(`   Saved: ${compressionInfo.compressionRatio}%`);
 
         // Generate signed URL for videos and images to ensure they're accessible
         let accessibleUrl: string = s3Result.url;
         if (finalContentType === 'VIDEO' || finalContentType === 'IMAGE') {
           try {
             // Generate signed URL with MIME type for proper streaming/display support
-            const signedUrl = await SignedUrlHelper.generateSignedUrl(s3Result.url, 86400, req.file!.mimetype);
+            const signedUrl = await SignedUrlHelper.generateSignedUrl(s3Result.url, 86400, compressionInfo.mimeType);
             // Use signed URL if generated, otherwise fallback to direct S3 URL
             if (signedUrl) {
               accessibleUrl = signedUrl;
-              console.log(`✅ Generated signed URL for ${finalContentType} (${req.file!.mimetype}):`, accessibleUrl.substring(0, 80) + '...');
+              console.log(`✅ Generated signed URL for ${finalContentType} (${compressionInfo.mimeType}):`, accessibleUrl.substring(0, 80) + '...');
             } else {
               console.warn(`⚠️ Signed URL generation returned undefined for ${finalContentType}, using direct S3 URL`);
             }
@@ -2413,16 +2631,24 @@ export class CourseController {
 
         res.status(201).json({
           status: 'success',
-          message: 'Course content uploaded successfully',
+          message: 'Course content uploaded and compressed successfully',
           data: {
             id: result.insertId,
             title: title || req.file!.originalname,
             content_type: finalContentType,
-            content_url: accessibleUrl, // Return signed URL for videos/images or direct S3 URL as fallback
+            content_url: accessibleUrl,
             file_name: req.file!.originalname,
-            file_size: req.file!.size,
-            section_id: parseInt(section_id),
-            mime_type: req.file!.mimetype // Include MIME type in response for client debugging
+            mime_type: compressionInfo.mimeType,
+            sort_order: createdContent?.sort_order || autoSortOrder,
+            upload_details: {
+              original_size: CompressionService.formatBytes(req.file!.size),
+              compressed_size: CompressionService.formatBytes(compressionInfo.compressedSize),
+              compression_ratio: `${compressionInfo.compressionRatio}%`,
+              compression_time_ms: compressionInfo.compressionTime,
+              storage_saved: CompressionService.formatBytes(req.file!.size - compressionInfo.compressedSize),
+              file_type: compressionInfo.fileType
+            },
+            section_id: parseInt(section_id)
           }
         });
       });

@@ -65,14 +65,18 @@ export class SignedUrlHelper {
       const fileKey = this.extractS3FileKey(url);
       if (!fileKey) {
         // URL is not an S3 URL, return as is (e.g., YouTube URL)
+        console.log(`ℹ️ Not an S3 URL, returning as-is: ${url.substring(0, 60)}...`);
         return url;
       }
 
       // Generate and return signed URL with content type for proper streaming
       const signedUrl = await S3Service.generateSignedUrl(fileKey, expiresIn, mimeType);
+      if (mimeType && mimeType.startsWith('video/')) {
+        console.log(`✅ Generated VIDEO signed URL for ${fileKey.split('/').pop()} (MIME: ${mimeType})`);
+      }
       return signedUrl;
     } catch (error) {
-      console.warn('Error generating signed URL, returning original URL:', { url, error });
+      console.warn('⚠️ Error generating signed URL, returning original URL:', { url: url.substring(0, 60), error: error instanceof Error ? error.message : error });
       // Return original URL on error (fallback to direct S3 URL)
       return url;
     }
@@ -82,12 +86,20 @@ export class SignedUrlHelper {
    * Process signed URLs for course content
    * Handles content_url and content_text with embedded URLs
    */
-  static async processContentSignedUrls(content: any, expiresIn: number = 86400): Promise<void> {
+  static async processContentSignedUrls(content: any, expiresIn: number = 3600): Promise<void> {
     if (!content) {
       return;
     }
 
     try {
+      // For videos, use longer expiration time (24 hours) to allow watching over time
+      // For other content, use default expiration
+      let finalExpiresIn = expiresIn;
+      if (content.content_type === 'VIDEO') {
+        finalExpiresIn = 86400; // 24 hours for videos
+        console.log(`⏱️  VIDEO: Using extended expiration of ${finalExpiresIn}s (24 hours)`);
+      }
+
       // Process content_url (for files, videos, etc.)
       if (content.content_url) {
         // Infer MIME type from filename if not in database
@@ -97,11 +109,30 @@ export class SignedUrlHelper {
           console.log(`📝 Inferred MIME type for ${content.file_name}: ${mimeType}`);
         }
         
+        // Debug logging for video files
+        if (mimeType && mimeType.startsWith('video/')) {
+          console.log(`🎬 Processing VIDEO content:`, {
+            title: content.title,
+            fileName: content.file_name,
+            mimeType,
+            contentType: content.content_type,
+            hasUrl: !!content.content_url,
+            expiresIn: finalExpiresIn
+          });
+        }
+        
         // Pass MIME type for better streaming support on videos/images
-        const processedUrl = await this.generateSignedUrl(content.content_url, expiresIn, mimeType);
+        const processedUrl = await this.generateSignedUrl(content.content_url, finalExpiresIn, mimeType);
         // Always keep original URL if processing fails (processedUrl could be undefined)
         if (processedUrl) {
           content.content_url = processedUrl;
+          
+          // Additional debug for videos
+          if (mimeType && mimeType.startsWith('video/')) {
+            console.log(`✅ Video signed URL generated successfully with ${finalExpiresIn}s expiration`);
+          }
+        } else {
+          console.warn(`⚠️ Failed to process URL, keeping original`);
         }
         // If processedUrl is undefined, keep original content.content_url
       }
@@ -124,7 +155,7 @@ export class SignedUrlHelper {
           
           for (const match of matches) {
             if (!urlMap.has(match)) {
-              const signedUrl = await this.generateSignedUrl(match, expiresIn, mimeType);
+              const signedUrl = await this.generateSignedUrl(match, finalExpiresIn, mimeType);
               if (signedUrl) {
                 urlMap.set(match, signedUrl);
               }

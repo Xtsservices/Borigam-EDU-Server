@@ -1,5 +1,7 @@
 import AWS from 'aws-sdk';
 import path from 'path';
+import fs from 'fs';
+import { CompressionService } from './compressionService';
 
 // Configure AWS
 AWS.config.update({
@@ -122,6 +124,126 @@ export class S3Service {
   }
 
   /**
+   * Upload file with compression to S3
+   * Compresses the file first, then uploads the compressed version to S3
+   * Returns both original and compressed file information
+   */
+  static async uploadFileWithCompression(params: UploadFileParams & { buffer: Buffer }): Promise<{
+    uploadResult: UploadResult;
+    compressionInfo: {
+      originalSize: number;
+      compressedSize: number;
+      compressionRatio: number;
+      compressionTime: number;
+      fileType: string;
+      mimeType: string;
+    }
+  }> {
+    let tempFilePath: string | null = null;
+    
+    try {
+      const { buffer, originalName, mimeType, courseId, sectionId, contentType, courseName, sectionName } = params;
+
+      // Save buffer to temp file for compression
+      const tempDir = path.join(process.cwd(), 'temp');
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+      
+      tempFilePath = path.join(tempDir, `upload-${Date.now()}-${originalName}`);
+      fs.writeFileSync(tempFilePath, buffer);
+
+      console.log(`\n📥 Uploading with compression: ${originalName}`);
+      
+      // Compress the file
+      const compressionResult = await CompressionService.compressFile(
+        tempFilePath,
+        mimeType,
+        originalName
+      );
+
+      // Read compressed file
+      const compressedBuffer = fs.readFileSync(compressionResult.compressedPath);
+
+      // Generate unique file key with descriptive names
+      const fileKey = await S3Service.generateFileKey(
+        courseId, 
+        sectionId, 
+        contentType, 
+        originalName, 
+        courseName, 
+        sectionName
+      );
+
+      // S3 upload parameters for compressed file
+      const uploadParams: AWS.S3.PutObjectRequest = {
+        Bucket: S3Service.BUCKET_NAME,
+        Key: fileKey,
+        Body: compressedBuffer,
+        ContentType: compressionResult.mimeType, // Use compressed file MIME type
+        ServerSideEncryption: 'AES256',
+        Metadata: {
+          'course-id': courseId.toString(),
+          'section-id': sectionId.toString(),
+          'course-name': courseName || `Course-${courseId}`,
+          'section-name': sectionName || `Section-${sectionId}`,
+          'content-type': contentType,
+          'original-name': originalName,
+          'original-size': compressionResult.originalSize.toString(),
+          'compressed-size': compressionResult.compressedSize.toString(),
+          'compression-ratio': compressionResult.compressionRatio.toString(),
+          'file-type': compressionResult.fileType,
+          'upload-timestamp': new Date().toISOString(),
+          'compression-quality': 'lossless-high-quality'
+        }
+      };
+
+      // Upload compressed file to S3
+      const result = await s3.upload(uploadParams).promise();
+
+      console.log(`✅ S3 Upload with compression successful:`, {
+        Location: result.Location,
+        OriginalSize: CompressionService.formatBytes(compressionResult.originalSize),
+        CompressedSize: CompressionService.formatBytes(compressionResult.compressedSize),
+        CompressionRatio: `${compressionResult.compressionRatio}%`
+      });
+
+      const uploadResult = {
+        key: fileKey,
+        url: result.Location,
+        bucket: S3Service.BUCKET_NAME,
+        size: compressedBuffer.length
+      };
+
+      // Clean up temp files
+      CompressionService.cleanupTempFile(tempFilePath);
+      CompressionService.cleanupTempFile(compressionResult.compressedPath);
+
+      return {
+        uploadResult,
+        compressionInfo: {
+          originalSize: compressionResult.originalSize,
+          compressedSize: compressionResult.compressedSize,
+          compressionRatio: compressionResult.compressionRatio,
+          compressionTime: compressionResult.compressionTime,
+          fileType: compressionResult.fileType,
+          mimeType: compressionResult.mimeType
+        }
+      };
+
+    } catch (error) {
+      console.error('❌ Error uploading file with compression to S3:', error);
+      
+      // Clean up temp files on error
+      if (tempFilePath && fs.existsSync(tempFilePath)) {
+        CompressionService.cleanupTempFile(tempFilePath);
+      }
+      
+      throw new Error('Failed to upload file with compression to storage');
+    }
+  }
+
+  /**
    * Upload course image to S3
    */
   static async uploadCourseImage(
@@ -197,13 +319,52 @@ export class S3Service {
       };
 
       // For video/media files, include ResponseContentType for proper streaming support
-      // AWS SDK v2 uses ResponseContentType in the params object
-      if (contentType && contentType.startsWith('video/')) {
+      // AWS SDK v2 includes this as a query parameter in the signed URL
+      if (contentType) {
         signedUrlOptions.ResponseContentType = contentType;
+        console.log(`📋 Set ResponseContentType to: ${contentType}`);
+      }
+
+      // For video files specifically, ensure proper headers for range requests and seeking
+      if (contentType && contentType.startsWith('video/')) {
+        // Add ResponseCacheControl for better streaming performance
+        signedUrlOptions.ResponseCacheControl = 'public, max-age=3600';
+        // Don't force download, allow inline playback
+        signedUrlOptions.ResponseContentDisposition = 'inline';
+        console.log(`🎬 VIDEO: Configured for inline streaming with cache control`);
+      }
+      // For document files (PDF, DOCX, DOC, etc.), configure for inline viewing
+      else if (contentType && (
+        contentType.includes('pdf') || 
+        contentType.includes('word') || 
+        contentType.includes('document') ||
+        contentType.includes('officedocument')
+      )) {
+        // Allow inline viewing in browser instead of forcing download
+        signedUrlOptions.ResponseContentDisposition = 'inline; filename="document"';
+        signedUrlOptions.ResponseCacheControl = 'public, max-age=3600';
+        console.log(`📄 DOCUMENT: Configured for inline viewing (${contentType})`);
+      }
+      // For images, also configure for inline viewing
+      else if (contentType && contentType.startsWith('image/')) {
+        signedUrlOptions.ResponseContentDisposition = 'inline';
+        signedUrlOptions.ResponseCacheControl = 'public, max-age=86400'; // 24 hours for images
+        console.log(`🖼️ IMAGE: Configured for inline display`);
       }
 
       const signedUrl = await s3.getSignedUrlPromise('getObject', signedUrlOptions);
       console.log(`✅ Generated signed URL for ${cleanFileKey}`);
+      
+      // Debug log the signed URL structure
+      if (contentType && contentType.startsWith('video/')) {
+        const urlParams = new URL(signedUrl);
+        console.log(`📹 Video signed URL params:`, {
+          hasResponseContentType: urlParams.searchParams.has('response-content-type'),
+          responseContentType: urlParams.searchParams.get('response-content-type'),
+          hasCacheControl: urlParams.searchParams.has('response-cache-control')
+        });
+      }
+      
       return signedUrl;
 
     } catch (error) {
@@ -414,15 +575,18 @@ export class S3Service {
    * Get file type category based on MIME type
    */
   static getFileTypeCategory(mimeType: string): string {
+    // Return only valid database ENUM values: TEXT, YOUTUBE, PDF, DOC, DOCX, IMAGE, VIDEO, AUDIO, QUIZ, ASSIGNMENT
     if (mimeType.startsWith('image/')) return 'IMAGE';
     if (mimeType.startsWith('video/')) return 'VIDEO';
     if (mimeType.startsWith('audio/')) return 'AUDIO';
     if (mimeType === 'application/pdf') return 'PDF';
-    if (mimeType.includes('word') || mimeType.includes('document')) return 'DOC';
-    if (mimeType.includes('powerpoint') || mimeType.includes('presentation')) return 'PPT';
-    if (mimeType === 'text/plain') return 'TEXT';
+    if (mimeType === 'application/msword') return 'DOC';
+    if (mimeType.includes('wordprocessingml') || mimeType.includes('document')) return 'DOCX';
+    if (mimeType.includes('powerpoint') || mimeType.includes('presentation')) return 'DOCX'; // Map PPT to DOCX
+    if (mimeType === 'text/plain' || mimeType.startsWith('text/')) return 'TEXT';
     
-    return 'OTHER';
+    // Default fallback to PDF for unknown document types
+    return 'PDF';
   }
 
   /**

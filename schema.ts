@@ -484,8 +484,6 @@ export async function initializeDatabase(): Promise<void> {
         // Create default admin user
         await createDefaultAdminUser(connection);
 
-        connection.release();
-        console.log("🎉 Database schema initialization completed successfully!");
 
     } catch (error) {
         console.error("❌ Error initializing database:", error);

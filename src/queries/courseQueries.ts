@@ -166,7 +166,7 @@ export class CourseContentQueries {
   static readonly getContentsBySection = `
     SELECT * FROM course_contents 
     WHERE section_id = ? AND status = 1
-    ORDER BY sort_order
+    ORDER BY sort_order ASC
   `;
 
   static readonly getContentsByCourse = `
@@ -174,7 +174,7 @@ export class CourseContentQueries {
     FROM course_contents cc
     JOIN course_sections cs ON cc.section_id = cs.id
     WHERE cc.course_id = ? AND cc.status = 1
-    ORDER BY cs.sort_order, cc.sort_order
+    ORDER BY cs.sort_order ASC, cc.sort_order ASC
   `;
 
   static readonly updateContent = `
