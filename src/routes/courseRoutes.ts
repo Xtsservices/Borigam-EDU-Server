@@ -121,8 +121,23 @@ router.post('/:courseId/sections/:sectionId/contents/upload',
 // Create content for a section (Admin only)
 router.post('/:courseId/sections/:sectionId/contents', adminOnly, CourseController.createContent);
 
-// Update content (Admin only)
-router.put('/:courseId/sections/:sectionId/contents/:contentId', adminOnly, CourseController.updateContent);
+// Update content (Admin only) - with file upload support
+router.put('/:courseId/sections/:sectionId/contents/:contentId', 
+  adminOnly,
+  (req, res, next) => {
+    // Optional file upload for content
+    uploadMiddleware.single('content_file')(req, res, (error: any) => {
+      if (error) {
+        return res.status(400).json({
+          status: 'error',
+          message: handleMulterError(error)
+        });
+      }
+      next();
+    });
+  },
+  CourseController.updateContent
+);
 
 /**
  * Content Access Routes

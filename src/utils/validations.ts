@@ -638,3 +638,57 @@ export const examValidation = {
     })
   })
 };
+
+// File upload validation schemas
+export const fileUploadValidation = {
+  // Validate file upload for course content (supports up to 3GB)
+  uploadCourseContent: Joi.object({
+    course_id: Joi.number().integer().positive().required().messages({
+      'number.positive': 'Course ID must be a positive integer',
+      'any.required': 'Course ID is required'
+    }),
+    section_id: Joi.number().integer().positive().required().messages({
+      'number.positive': 'Section ID must be a positive integer',
+      'any.required': 'Section ID is required'
+    }),
+    content_type: Joi.string().valid('TEXT', 'PDF', 'DOC', 'DOCX', 'IMAGE', 'VIDEO', 'AUDIO', 'FILE').required().messages({
+      'any.only': 'Valid content types are: TEXT, PDF, DOC, DOCX, IMAGE, VIDEO, AUDIO, FILE',
+      'any.required': 'Content type is required'
+    }),
+    title: Joi.string().min(2).max(255).required().messages({
+      'string.min': 'File title must be at least 2 characters',
+      'string.max': 'File title cannot exceed 255 characters',
+      'any.required': 'File title is required'
+    }),
+    description: Joi.string().max(1000).optional().messages({
+      'string.max': 'Description cannot exceed 1000 characters'
+    }),
+    is_free: Joi.boolean().optional().default(false)
+  }),
+
+  // Validate file metadata for any file type (up to 3GB)
+  fileMetadata: Joi.object({
+    fileName: Joi.string().min(1).max(255).required().messages({
+      'string.min': 'File name is required',
+      'string.max': 'File name cannot exceed 255 characters',
+      'any.required': 'File name is required'
+    }),
+    fileSize: Joi.number().integer().positive().max(3 * 1024 * 1024 * 1024).required().messages({
+      'number.positive': 'File size must be a positive number',
+      'number.max': 'File size cannot exceed 3GB (3,221,225,472 bytes)',
+      'any.required': 'File size is required'
+    }),
+    mimeType: Joi.string().required().messages({
+      'any.required': 'MIME type is required'
+    })
+  }),
+
+  // Validate file upload request parameters
+  uploadRequest: Joi.object({
+    course_id: Joi.number().integer().positive().required(),
+    section_id: Joi.number().integer().positive().required(),
+    content_type: Joi.string().valid('TEXT', 'PDF', 'DOC', 'DOCX', 'IMAGE', 'VIDEO', 'AUDIO', 'FILE').optional(),
+    title: Joi.string().min(2).max(255).optional(),
+    description: Joi.string().max(1000).optional()
+  })
+};
