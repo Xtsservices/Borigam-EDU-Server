@@ -158,7 +158,7 @@ export async function initializeDatabase(): Promise<void> {
                 course_id BIGINT NOT NULL,
                 title VARCHAR(255) NOT NULL,
                 description TEXT,
-                sort_order INT DEFAULT 0,
+                sort_order INT DEFAULT 1,
                 is_free BOOLEAN DEFAULT FALSE,
                 status SMALLINT DEFAULT 1,
                 created_by BIGINT,
@@ -170,6 +170,23 @@ export async function initializeDatabase(): Promise<void> {
                 FOREIGN KEY (updated_by) REFERENCES users(id)
             );
         `);
+
+        // Fix sort_order DEFAULT for existing course_sections tables
+        try {
+            await connection.query(`
+                ALTER TABLE course_sections MODIFY COLUMN sort_order INT DEFAULT 1
+            `);
+            console.log('✅ Fixed course_sections sort_order DEFAULT to 1');
+            
+            // Verify the change
+            const [columnInfo]: any = await connection.query(`
+                SELECT COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'course_sections' AND COLUMN_NAME = 'sort_order' AND TABLE_SCHEMA = ?
+            `, [process.env.DB_NAME]);
+            console.log(`🔍 Verified course_sections sort_order DEFAULT:`, columnInfo[0]?.COLUMN_DEFAULT);
+        } catch (alterError: any) {
+            console.log('ℹ️ course_sections sort_order DEFAULT already set or table structure updated');
+        }
 
         // Course Contents
         await connection.query(`
@@ -198,7 +215,7 @@ export async function initializeDatabase(): Promise<void> {
                 content_text LONGTEXT,
                 file_name VARCHAR(255),
                 youtube_url VARCHAR(500),
-                sort_order INT DEFAULT 0,
+                sort_order INT DEFAULT 1,
                 duration INT DEFAULT 0,
                 is_free BOOLEAN DEFAULT FALSE,
                 status SMALLINT DEFAULT 1,
@@ -216,6 +233,23 @@ export async function initializeDatabase(): Promise<void> {
                 FOREIGN KEY (updated_by) REFERENCES users(id)
             );
         `);
+
+        // Fix sort_order DEFAULT for existing course_contents tables
+        try {
+            await connection.query(`
+                ALTER TABLE course_contents MODIFY COLUMN sort_order INT DEFAULT 1
+            `);
+            console.log('✅ Fixed course_contents sort_order DEFAULT to 1');
+            
+            // Verify the change
+            const [columnInfo]: any = await connection.query(`
+                SELECT COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'course_contents' AND COLUMN_NAME = 'sort_order' AND TABLE_SCHEMA = ?
+            `, [process.env.DB_NAME]);
+            console.log(`🔍 Verified course_contents sort_order DEFAULT:`, columnInfo[0]?.COLUMN_DEFAULT);
+        } catch (alterError: any) {
+            console.log('ℹ️ course_contents sort_order DEFAULT already set or table structure updated');
+        }
 
         // Institutions
         await connection.query(`

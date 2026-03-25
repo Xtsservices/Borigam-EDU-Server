@@ -6,6 +6,7 @@ import {
   selfOrAdmin, 
   apiRateLimit 
 } from '../middlewares/auth';
+import { wrapAsync } from '../utils/asyncHandler';
 
 const router = Router();
 
@@ -22,12 +23,12 @@ router.use(apiRateLimit);
 router.use(authenticateToken);
 
 // Admin only routes
-router.post('/', adminOnly, UserController.createUser);           // Create user
-router.get('/', adminOnly, UserController.getAllUsers);          // Get all users
-router.delete('/:id', adminOnly, UserController.deleteUser);     // Delete user
+router.post('/', adminOnly, wrapAsync(UserController.createUser));           // Create user
+router.get('/', adminOnly, wrapAsync(UserController.getAllUsers));          // Get all users
+router.delete('/:id', adminOnly, wrapAsync(UserController.deleteUser));     // Delete user
 
 // Self or Admin routes
-router.get('/:id', selfOrAdmin, UserController.getUserById);     // Get user by ID
-router.put('/:id', selfOrAdmin, UserController.updateUser);      // Update user
+router.get('/:id', selfOrAdmin, wrapAsync(UserController.getUserById));     // Get user by ID
+router.put('/:id', selfOrAdmin, wrapAsync(UserController.updateUser));      // Update user
 
 export default router;

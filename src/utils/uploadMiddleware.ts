@@ -1,5 +1,7 @@
 import multer from 'multer';
 import { Request } from 'express';
+import path from 'path';
+import fs from 'fs';
 import { S3Service } from './s3Service';
 
 // Define interface for authenticated request
@@ -13,6 +15,27 @@ interface AuthenticatedRequest extends Request {
   };
 }
 
+// Ensure uploads directory exists
+const uploadsDir = path.join(process.cwd(), 'uploads', 'temp');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log(`📁 Created uploads directory: ${uploadsDir}`);
+}
+
+// Disk storage configuration for large file handling
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    // Generate unique filename with timestamp and random string
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 8);
+    const originalName = file.originalname.replace(/[^a-zA-Z0-9-_\.]/g, '-');
+    cb(null, `${timestamp}-${random}-${originalName}`);
+  }
+});
+
 // File filter function
 const fileFilter = (req: AuthenticatedRequest, file: Express.Multer.File, cb: (error: Error | null, acceptFile?: boolean) => void) => {
   // Check if file type is allowed
@@ -23,11 +46,11 @@ const fileFilter = (req: AuthenticatedRequest, file: Express.Multer.File, cb: (e
   }
 };
 
-// Multer configuration for memory storage
+// Multer configuration for disk storage (streaming support)
 // 3GB file size limit (3 * 1024 * 1024 * 1024 = 3221225472 bytes)
 const THREE_GB_BYTES = 3 * 1024 * 1024 * 1024;
 const upload = multer({
-  storage: multer.memoryStorage(), // Store files in memory for S3 upload
+  storage: storage, // Use disk storage for large file streaming
   limits: {
     fileSize: THREE_GB_BYTES, // Max 3GB per file
     files: 10, // Max 10 files per request
@@ -276,4 +299,58 @@ export const handleMulterError = (error: any) => {
   }
   
   return error.message ? `❌ ${error.message}` : '❌ File upload failed. Please try again.';
+};
+
+/**
+ * Utility to clean up temporary uploaded files
+ * Call this after successful S3 upload to free disk space
+ */
+export const cleanupTempFile = async (filePath: string): Promise<boolean> => {
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`🧹 Cleaned up temporary file: ${filePath}`);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error(`❌ Error cleaning temporary file ${filePath}:`, error);
+    return false;
+  }
+};
+
+/**
+ * Utility to clean up old temporary files (older than 24 hours)
+ * Call this periodically to prevent disk space issues
+ */
+export const cleanupOldTempFiles = async (maxAgeHours: number = 24): Promise<number> => {
+  try {
+    const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
+    const now = Date.now();
+    let deletedCount = 0;
+
+    const files = fs.readdirSync(uploadsDir);
+    for (const file of files) {
+      const filePath = path.join(uploadsDir, file);
+      const stats = fs.statSync(filePath);
+      
+      if (now - stats.mtimeMs > maxAgeMs) {
+        try {
+          fs.unlinkSync(filePath);
+          deletedCount++;
+          console.log(`🧹 Cleaned up old temporary file: ${file}`);
+        } catch (error) {
+          console.error(`⚠️ Failed to delete old temp file ${file}:`, error);
+        }
+      }
+    }
+
+    if (deletedCount > 0) {
+      console.log(`✅ Cleaned up ${deletedCount} old temporary files`);
+    }
+    return deletedCount;
+  } catch (error) {
+    console.error(`❌ Error during cleanup of old temp files:`, error);
+    return 0;
+  }
 };

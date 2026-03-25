@@ -6,6 +6,7 @@ import {
   adminOrInstituteAdminOnly, 
   apiRateLimit 
 } from '../middlewares/auth';
+import { wrapAsync } from '../utils/asyncHandler';
 
 const router = Router();
 
@@ -26,32 +27,32 @@ router.use(authenticateToken);
  */
 
 // Create student (Admin can specify institution, Institute Admin uses their own)
-router.post('/', adminOrInstituteAdminOnly, StudentController.createStudent);
+router.post('/', adminOrInstituteAdminOnly, wrapAsync(StudentController.createStudent));
 
 /**
  * Student CRUD Routes
  */
 
 // Get all students (Admin only)
-router.get('/', adminOnly, StudentController.getAllStudents);
+router.get('/', adminOnly, wrapAsync(StudentController.getAllStudents));
 
 // Get my courses dashboard (Student dashboard cards)
-router.get('/my-courses/dashboard', StudentController.getMyCoursesCards);
+router.get('/my-courses/dashboard', wrapAsync(StudentController.getMyCoursesCards));
 
 // Get my enrolled courses (Student can view their own courses)
-router.get('/my-courses', StudentController.getMyEnrolledCourses);
+router.get('/my-courses', wrapAsync(StudentController.getMyEnrolledCourses));
 
 // Get students by institution (Admin or Institute Admin)
-router.get('/institution/:id', adminOrInstituteAdminOnly, StudentController.getStudentsByInstitution);
+router.get('/institution/:id', adminOrInstituteAdminOnly, wrapAsync(StudentController.getStudentsByInstitution));
 
 // Get student by ID with complete details
-router.get('/:id', adminOrInstituteAdminOnly, StudentController.getStudentById);
+router.get('/:id', adminOrInstituteAdminOnly, wrapAsync(StudentController.getStudentById));
 
 // Update student (unified endpoint for all updates)
-router.put('/:id', adminOrInstituteAdminOnly, StudentController.updateStudent);
+router.put('/:id', adminOrInstituteAdminOnly, wrapAsync(StudentController.updateStudent));
 
 // Delete student (soft delete)
-router.delete('/:id', adminOrInstituteAdminOnly, StudentController.deleteStudent);
+router.delete('/:id', adminOrInstituteAdminOnly, wrapAsync(StudentController.deleteStudent));
 
 /**
  * Student Progress Tracking Routes
@@ -60,13 +61,13 @@ router.delete('/:id', adminOrInstituteAdminOnly, StudentController.deleteStudent
 // Track student content progress
 router.post('/:studentId/courses/:courseId/content/:contentId/progress', 
   adminOrInstituteAdminOnly, 
-  StudentController.trackContentProgress
+  wrapAsync(StudentController.trackContentProgress)
 );
 
 // Get course progress for a student
 router.get('/:studentId/courses/:courseId/progress', 
   adminOrInstituteAdminOnly, 
-  StudentController.getCourseProgress
+  wrapAsync(StudentController.getCourseProgress)
 );
 
 /**
@@ -76,19 +77,19 @@ router.get('/:studentId/courses/:courseId/progress',
 // Get Institute Admin dashboard data
 router.get('/institute-admin/dashboard', 
   adminOrInstituteAdminOnly, 
-  InstituteAdminController.getDashboard
+  wrapAsync(InstituteAdminController.getDashboard)
 );
 
 // Get students with their progress for Institute Admin
 router.get('/institute-admin/students', 
   adminOrInstituteAdminOnly, 
-  InstituteAdminController.getStudentsWithProgress
+  wrapAsync(InstituteAdminController.getStudentsWithProgress)
 );
 
 // Get specific course students progress for Institute Admin
 router.get('/institute-admin/courses/:courseId/students', 
   adminOrInstituteAdminOnly, 
-  InstituteAdminController.getCourseStudentsProgress
+  wrapAsync(InstituteAdminController.getCourseStudentsProgress)
 );
 
 export default router;

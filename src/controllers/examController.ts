@@ -4,6 +4,7 @@
  */
 
 import { Response } from 'express';
+import fs from 'fs';
 import { AuthenticatedRequest } from '../middlewares/auth';
 import {
   ExamTypeQueries,
@@ -1159,14 +1160,36 @@ export class ExamMaterialController {
           }
 
           // Upload to S3
+          // With disk storage, read file from disk instead of using buffer
+          let fileBuffer: Buffer;
+          const filePath = (file as any).path;
+          
+          if (filePath) {
+            // Disk storage: read file from path
+            fileBuffer = fs.readFileSync(filePath);
+          } else {
+            // Memory storage (fallback): use buffer directly
+            fileBuffer = file.buffer;
+          }
+
           const uploadResult = await S3Service.uploadFile({
-            buffer: file.buffer,
+            buffer: fileBuffer,
             originalName: file.originalname,
             mimeType: file.mimetype,
             courseId: section.course_id || 1,
             sectionId: exam_section_id,
             contentType: 'EXAM_MATERIAL'
           });
+
+          // Clean up temp file after upload (if using disk storage)
+          if (filePath) {
+            try {
+              const { cleanupTempFile } = require('../utils/uploadMiddleware');
+              await cleanupTempFile(filePath);
+            } catch (cleanupError) {
+              console.warn(`⚠️ Failed to cleanup temp file:`, cleanupError);
+            }
+          }
 
           finalPdfUrl = uploadResult.url;
           fileSize = file.size;

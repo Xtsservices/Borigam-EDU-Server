@@ -3,11 +3,17 @@ import path from 'path';
 import fs from 'fs';
 import { CompressionService } from './compressionService';
 
-// Configure AWS
+// Configure AWS with optimized settings for large file uploads
 AWS.config.update({
   accessKeyId: process.env.AWS_ACCESS_KEY_ID,
   secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   region: process.env.AWS_REGION || 'us-east-1',
+  httpOptions: {
+    timeout: 0, // No timeout (required for large files)
+    connectTimeout: 30000, // 30 seconds to connect
+    socketTimeout: 30000 // 30 seconds per socket operation
+  },
+  maxRetries: 3
 });
 
 const s3 = new AWS.S3();
@@ -120,6 +126,112 @@ export class S3Service {
     } catch (error) {
       console.error('❌ Error uploading file to S3:', error);
       throw new Error('Failed to upload file to storage');
+    }
+  }
+
+  /**
+   * Upload a file to S3 from disk (streaming - preferred for large files)
+   * This method reads the file from disk as a stream instead of loading it into memory
+   * Much more efficient for large files like 1GB videos
+   */
+  static async uploadFileFromPath(
+    filePath: string,
+    originalName: string,
+    mimeType: string,
+    courseId: number,
+    sectionId: number,
+    contentType: string,
+    courseName?: string,
+    sectionName?: string
+  ): Promise<UploadResult> {
+    let fileStream: fs.ReadStream | null = null;
+    
+    try {
+      // Verify file exists
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`File not found: ${filePath}`);
+      }
+
+      // Get file size for monitoring
+      const fileStats = fs.statSync(filePath);
+      const fileSize = fileStats.size;
+
+      // Generate unique file key with descriptive names
+      const fileKey = await S3Service.generateFileKey(courseId, sectionId, contentType, originalName, courseName, sectionName);
+
+      console.log(`📤 S3Service.uploadFileFromPath called:`, {
+        filePath,
+        originalName,
+        mimeType,
+        contentType,
+        courseId,
+        sectionId,
+        fileKey,
+        fileSize: `${(fileSize / (1024 * 1024 * 1024)).toFixed(2)} GB`,
+        uploadMethod: 'streaming'
+      });
+
+      // Create read stream for file
+      fileStream = fs.createReadStream(filePath);
+
+      // S3 upload parameters with streaming Body
+      const uploadParams: AWS.S3.PutObjectRequest = {
+        Bucket: S3Service.BUCKET_NAME,
+        Key: fileKey,
+        Body: fileStream,
+        ContentType: mimeType,
+        ContentLength: fileSize, // Important for streaming uploads
+        ServerSideEncryption: 'AES256',
+        Metadata: {
+          'course-id': courseId.toString(),
+          'section-id': sectionId.toString(),
+          'course-name': courseName || `Course-${courseId}`,
+          'section-name': sectionName || `Section-${sectionId}`,
+          'content-type': contentType,
+          'original-name': originalName,
+          'upload-timestamp': new Date().toISOString(),
+          'upload-method': 'streaming'
+        }
+      };
+
+      // Track upload progress
+      let uploadedBytes = 0;
+      fileStream.on('data', (chunk) => {
+        uploadedBytes += chunk.length;
+        const percentComplete = ((uploadedBytes / fileSize) * 100).toFixed(2);
+        console.log(`📊 Upload progress: ${percentComplete}% (${(uploadedBytes / (1024 * 1024)).toFixed(2)} MB / ${(fileSize / (1024 * 1024)).toFixed(2)} MB)`);
+      });
+
+      // Upload to S3
+      const result = await s3.upload(uploadParams).promise();
+
+      console.log(`✅ S3 Streaming Upload successful:`, {
+        Location: result.Location,
+        Bucket: result.Bucket,
+        Key: result.Key,
+        ETag: result.ETag,
+        fileSize: `${(fileSize / (1024 * 1024 * 1024)).toFixed(2)} GB`
+      });
+
+      const uploadResult = {
+        key: fileKey,
+        url: result.Location,
+        bucket: S3Service.BUCKET_NAME,
+        size: fileSize
+      };
+
+      console.log(`📦 Upload Result:`, uploadResult);
+
+      return uploadResult;
+
+    } catch (error) {
+      console.error('❌ Error uploading file to S3 from path:', error);
+      throw new Error(`Failed to upload file to storage: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      // Ensure stream is closed if it exists
+      if (fileStream) {
+        fileStream.destroy();
+      }
     }
   }
 

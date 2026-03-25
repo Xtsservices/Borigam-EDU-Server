@@ -36,8 +36,22 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(cors());
 // Increase limits for large file uploads - Support up to 3GB files
+// Note: Express limits are for request parsing, actual multer limits are configured in uploadMiddleware.ts
 app.use(express.json({ limit: '3gb' }));
 app.use(express.urlencoded({ extended: true, limit: '3gb' }));
+
+// Configure request timeout middleware for large file uploads
+// Set request timeout to 30 minutes (1800000 ms) to avoid 504 Gateway Timeout
+app.use((req, res, next) => {
+  // Don't set timeout for health checks
+  if (req.path === '/health' || req.path === '/api/health') {
+    return next();
+  }
+  
+  // Set timeout to 30 minutes for all other requests (especially file uploads)
+  req.socket.setTimeout(30 * 60 * 1000); // 30 minutes in milliseconds
+  next();
+});
 
 // Trust proxy for rate limiting and IP detection
 app.set('trust proxy', 1);
@@ -103,11 +117,18 @@ async function startServer() {
     await initializeDatabase();
     
     // Start server after successful database initialization
-    
-    // Start server after successful database initialization
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
         console.log(`🚀 Server is running on port ${PORT}`);
     });
+    
+    // Configure timeouts for large file uploads
+    // Set socket timeout to 30 minutes (1800000 ms) - allows large file uploads
+    server.timeout = 30 * 60 * 1000;
+    server.keepAliveTimeout = 31 * 60 * 1000; // Slightly higher than timeout
+    server.headersTimeout = 35 * 60 * 1000; // Even higher for headers
+    
+    console.log(`⏱️  Server timeout configured: ${server.timeout / 1000 / 60} minutes`);
+    
   } catch (error) {
     console.error("❌ Failed to start server:", error);
     process.exit(1);

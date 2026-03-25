@@ -19,6 +19,10 @@ dist-ssr
 .env.production
 .env.test
 
+# Temporary uploaded files (from multer disk storage)
+uploads/
+temp/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

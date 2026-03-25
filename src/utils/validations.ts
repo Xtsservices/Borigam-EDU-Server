@@ -177,9 +177,7 @@ export const courseSectionValidation = {
     description: Joi.string().max(1000).optional().messages({
       'string.max': 'Section description cannot exceed 1000 characters'
     }),
-    sort_order: Joi.number().integer().min(0).default(0).messages({
-      'number.min': 'Sort order cannot be negative'
-    }),
+    sort_order: Joi.number().integer().min(0).optional(),
     is_free: Joi.boolean().default(false)
   }),
 
@@ -240,7 +238,7 @@ export const courseContentValidation = {
     duration: Joi.number().integer().min(0).default(0).messages({
       'number.min': 'Duration cannot be negative'
     }),
-    sort_order: Joi.number().integer().min(0).default(0),
+    sort_order: Joi.number().integer().min(0).optional(),
     is_free: Joi.boolean().default(false)
   }),
 
@@ -329,8 +327,7 @@ export const institutionValidation = {
     phone: Joi.string().pattern(/^[0-9]{10}$/).optional().messages({
       'string.pattern.base': 'Phone number must be exactly 10 digits'
     }),
-    address: Joi.string().min(10).max(1000).optional().messages({
-      'string.min': 'Address must be at least 10 characters',
+    address: Joi.string().min(0).max(1000).optional().messages({
       'string.max': 'Address cannot exceed 1000 characters'
     }),
     course_ids: Joi.array().items(
@@ -352,7 +349,7 @@ export const institutionValidation = {
     name: Joi.string().min(2).max(255).optional(),
     email: Joi.string().email().max(150).optional(),
     phone: Joi.string().pattern(/^[0-9]{10}$/).optional(),
-    address: Joi.string().min(10).max(1000).optional(),
+    address: Joi.string().min(0).max(1000).optional(),
     status: Joi.number().integer().min(0).max(1).optional(),
     course_ids: Joi.array().items(
       Joi.number().integer().positive().messages({
