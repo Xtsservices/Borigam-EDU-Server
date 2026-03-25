@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import fs from 'fs';
 import {
   courseValidation,
   courseSectionValidation,
@@ -134,12 +135,36 @@ export class CourseController {
         if (req.file) {
           // File uploaded via form-data - upload to S3
           console.log('📁 File uploaded:', req.file.originalname, 'Size:', req.file.size);
+          
+          // With disk storage, read file from disk instead of using buffer
+          let fileBuffer: Buffer;
+          const filePath = (req.file as any).path;
+          
+          if (filePath) {
+            // Disk storage: read file from path
+            fileBuffer = fs.readFileSync(filePath);
+          } else {
+            // Memory storage (fallback): use buffer directly
+            fileBuffer = req.file.buffer;
+          }
+          
           const uploadResult = await S3Service.uploadCourseImage(
-            req.file.buffer,
+            fileBuffer,
             req.file.originalname,
             req.file.mimetype
           );
           finalCourseImage = uploadResult.url;
+          
+          // Clean up temp file after upload (if using disk storage)
+          if (filePath) {
+            try {
+              const { cleanupTempFile } = require('../utils/uploadMiddleware');
+              await cleanupTempFile(filePath);
+            } catch (cleanupError) {
+              console.warn(`⚠️ Failed to cleanup temp file:`, cleanupError);
+            }
+          }
+          
           console.log('✅ Image uploaded to S3:', finalCourseImage);
         } else if (course_image) {
           // Validate image URL - reject wrapper URLs like Google Images
@@ -576,14 +601,38 @@ export class CourseController {
         if (req.file) {
           // File uploaded via form-data - upload to S3
           console.log('📁 File uploaded for course update:', req.file.originalname, 'Size:', req.file.size);
+          
+          // With disk storage, read file from disk instead of using buffer
+          let fileBuffer: Buffer;
+          const filePath = (req.file as any).path;
+          
+          if (filePath) {
+            // Disk storage: read file from path
+            fileBuffer = fs.readFileSync(filePath);
+          } else {
+            // Memory storage (fallback): use buffer directly
+            fileBuffer = req.file.buffer;
+          }
+          
           const uploadResult = await S3Service.uploadCourseImage(
-            req.file.buffer,
+            fileBuffer,
             req.file.originalname,
             req.file.mimetype,
             courseId
           );
           finalCourseImage = uploadResult.url;
           updateImage = true;
+          
+          // Clean up temp file after upload (if using disk storage)
+          if (filePath) {
+            try {
+              const { cleanupTempFile } = require('../utils/uploadMiddleware');
+              await cleanupTempFile(filePath);
+            } catch (cleanupError) {
+              console.warn(`⚠️ Failed to cleanup temp file:`, cleanupError);
+            }
+          }
+          
           console.log('✅ Image uploaded to S3:', finalCourseImage);
         } else if (course_image !== undefined) {
           // Validate image URL - reject wrapper URLs like Google Images
@@ -850,7 +899,9 @@ export class CourseController {
         return;
       }
       
-      const { title, description, sort_order = 0, is_free = false } = req.body;
+      const { title, description, sort_order, is_free = false } = req.body;
+
+      console.log(`🔍 DEBUG (SECTION): Received sort_order from request: ${sort_order} (type: ${typeof sort_order})`);
 
       if (isNaN(courseId)) {
         res.status(400).json({
@@ -896,6 +947,69 @@ export class CourseController {
           return;
         }
 
+        // Parse and handle sort_order for sections
+        let finalSortOrder = typeof sort_order === 'string' ? parseInt(sort_order, 10) : (typeof sort_order === 'number' ? sort_order : undefined);
+        if (finalSortOrder !== undefined && isNaN(finalSortOrder)) {
+          finalSortOrder = undefined;
+        }
+        
+        console.log(`🔍 DEBUG (SECTION): Original sort_order provided: ${sort_order} (finalSortOrder before logic: ${finalSortOrder})`);
+        
+        // Check if user explicitly provided sort_order (not just defaulted to undefined)
+        const userProvidedSortOrder = sort_order !== undefined && sort_order !== null;
+
+        // Auto-assign sort_order if not provided: get the highest sort_order in this course + 1
+        if (finalSortOrder === undefined || finalSortOrder === null) {
+          const maxSortResult = await DatabaseHelpers.executeSelectOne(
+            connection,
+            `SELECT MAX(sort_order) as max_sort FROM course_sections 
+             WHERE course_id = ? AND status = 1`,
+            [courseId]
+          );
+          console.log(`📊 DEBUG (SECTION): MAX(sort_order) query result:`, maxSortResult);
+          const maxValue = maxSortResult?.max_sort;
+          console.log(`📊 DEBUG (SECTION): maxValue = ${maxValue}, type = ${typeof maxValue}`);
+          finalSortOrder = (maxValue || 0) + 1;
+          console.log(`🔢 Auto-assigned sort_order: ${finalSortOrder} for new section in course ${courseId} (NO SHIFTING - appending at end)`);
+        } else if (userProvidedSortOrder) {
+          // User explicitly provided sort_order - do auto-shift
+          console.log(`✅ User provided sort_order: ${sort_order} - performing auto-shift if needed`);
+          // If user provided sort_order, auto-shift any existing sections with sort_order >= provided value
+          const existingWithSortOrder = await DatabaseHelpers.executeSelectOne(
+            connection,
+            `SELECT COUNT(*) as count FROM course_sections 
+             WHERE course_id = ? AND sort_order >= ? AND status = 1`,
+            [courseId, finalSortOrder]
+          );
+          
+          if (existingWithSortOrder && existingWithSortOrder.count > 0) {
+            // Shift all existing sections with sort_order >= finalSortOrder up by 1
+            await DatabaseHelpers.executeQuery(
+              connection,
+              `UPDATE course_sections 
+               SET sort_order = sort_order + 1 
+               WHERE course_id = ? AND sort_order >= ? AND status = 1`,
+              [courseId, finalSortOrder]
+            );
+            console.log(`🔄 Auto-shifted ${existingWithSortOrder.count} sections in course ${courseId} to make room for user-provided sort_order: ${finalSortOrder}`);
+          }
+        }
+        
+        // Ensure finalSortOrder is always a valid number (safeguard against database DEFAULT 0)
+        if (finalSortOrder === undefined || finalSortOrder === null || isNaN(finalSortOrder)) {
+          finalSortOrder = 1;
+          console.log(`⚠️ Safeguard (SECTION): Set sort_order to 1 for new section in course ${courseId} (was: ${typeof finalSortOrder === 'number' ? finalSortOrder : 'undefined/null'})`);
+        } else {
+          console.log(`✅ Final sort_order for section: ${finalSortOrder} (type: ${typeof finalSortOrder})`);
+        }
+        
+        // CRITICAL: Verify finalSortOrder is a number before INSERT
+        finalSortOrder = Number(finalSortOrder);
+        if (isNaN(finalSortOrder) || finalSortOrder < 1) {
+          finalSortOrder = 1;
+        }
+        console.log(`📝 INSERTING section with sort_order: ${finalSortOrder} (confirmed as number)`);
+
         // Create the section
         const sectionId = await DatabaseHelpers.executeInsert(
           connection,
@@ -904,7 +1018,7 @@ export class CourseController {
             courseId,
             title || null,
             description || null,
-            sort_order || 0,
+            finalSortOrder,
             is_free || false,
             req.user?.id || null,
             req.user?.id || null
@@ -1170,22 +1284,29 @@ export class CourseController {
         file_size = 0,
         mime_type,
         duration = 0,
-        sort_order = 0,
+        sort_order,
         is_free = false
       } = req.body;
 
       // Handle both content_text and content_data field names (content_data is alternative field name)
       const finalContentText = content_text || (req.body as any).content_data;
       
+      console.log(`🔍 DEBUG: Received sort_order from request: ${sort_order} (type: ${typeof sort_order})`);
+      
       // Convert form data strings to proper types
       let finalIsFree = typeof is_free === 'string' ? (is_free === 'true' ? 1 : 0) : (is_free ? 1 : 0);
       let finalDuration = typeof duration === 'string' ? parseInt(duration, 10) : duration;
       let finalSortOrder = typeof sort_order === 'string' ? parseInt(sort_order, 10) : (typeof sort_order === 'number' ? sort_order : undefined);
       
-      // Ensure finalSortOrder is a number for proper comparison
-      if (finalSortOrder === undefined || isNaN(finalSortOrder)) {
-        finalSortOrder = 0;
+      // If sort_order not provided, will be auto-assigned later to append at end
+      if (finalSortOrder !== undefined && isNaN(finalSortOrder)) {
+        finalSortOrder = undefined;
       }
+      
+      console.log(`🔍 DEBUG: Original sort_order provided: ${sort_order} (finalSortOrder before logic: ${finalSortOrder})`);
+      
+      // Check if user explicitly provided sort_order (not just defaulted to undefined)
+      const userProvidedSortOrder = sort_order !== undefined && sort_order !== null;
 
       if (isNaN(courseId) || isNaN(sectionId)) {
         res.status(400).json({
@@ -1256,16 +1377,56 @@ export class CourseController {
         }
 
         // Auto-assign sort_order if not provided: get the highest sort_order in this section + 1
-        if (finalSortOrder === 0) {
+        if (finalSortOrder === undefined || finalSortOrder === null) {
           const maxSortResult = await DatabaseHelpers.executeSelectOne(
             connection,
             `SELECT MAX(sort_order) as max_sort FROM course_contents 
              WHERE section_id = ? AND status = 1`,
             [sectionId]
           );
-          finalSortOrder = (maxSortResult?.max_sort || 0) + 1;
-          console.log(`🔢 Auto-assigned sort_order: ${finalSortOrder} for new content in section ${sectionId}`);
+          console.log(`📊 DEBUG: MAX(sort_order) query result:`, maxSortResult);
+          const maxValue = maxSortResult?.max_sort;
+          console.log(`📊 DEBUG: maxValue = ${maxValue}, type = ${typeof maxValue}`);
+          finalSortOrder = (maxValue || 0) + 1;
+          console.log(`🔢 Auto-assigned sort_order: ${finalSortOrder} for new content in section ${sectionId} (NO SHIFTING - appending at end)`);
+        } else if (userProvidedSortOrder) {
+          // User explicitly provided sort_order - do auto-shift
+          console.log(`✅ User provided sort_order: ${sort_order} - performing auto-shift if needed`);
+          // If user provided sort_order, auto-shift any existing content with sort_order >= provided value
+          const existingWithSortOrder = await DatabaseHelpers.executeSelectOne(
+            connection,
+            `SELECT COUNT(*) as count FROM course_contents 
+             WHERE section_id = ? AND sort_order >= ? AND status = 1`,
+            [sectionId, finalSortOrder]
+          );
+          
+          if (existingWithSortOrder && existingWithSortOrder.count > 0) {
+            // Shift all existing content with sort_order >= finalSortOrder up by 1
+            await DatabaseHelpers.executeQuery(
+              connection,
+              `UPDATE course_contents 
+               SET sort_order = sort_order + 1 
+               WHERE section_id = ? AND sort_order >= ? AND status = 1`,
+              [sectionId, finalSortOrder]
+            );
+            console.log(`🔄 Auto-shifted ${existingWithSortOrder.count} content items in section ${sectionId} to make room for user-provided sort_order: ${finalSortOrder}`);
+          }
         }
+        
+        // Ensure finalSortOrder is always a valid number (safeguard against database DEFAULT 0)
+        if (finalSortOrder === undefined || finalSortOrder === null || isNaN(finalSortOrder)) {
+          finalSortOrder = 1;
+          console.log(`⚠️ Safeguard: Set sort_order to 1 for new content in section ${sectionId} (was: ${typeof finalSortOrder === 'number' ? finalSortOrder : 'undefined/null'})`);
+        } else {
+          console.log(`✅ Final sort_order for content: ${finalSortOrder} (type: ${typeof finalSortOrder})`);
+        }
+        
+        // CRITICAL: Verify finalSortOrder is a number before INSERT
+        finalSortOrder = Number(finalSortOrder);
+        if (isNaN(finalSortOrder) || finalSortOrder < 1) {
+          finalSortOrder = 1;
+        }
+        console.log(`📝 INSERTING content with sort_order: ${finalSortOrder} (confirmed as number)`);
 
         // Create the content
         const contentId = await DatabaseHelpers.executeInsert(
@@ -1337,8 +1498,19 @@ export class CourseController {
         return;
       }
       
-      const { title, description, content_type, duration = 0, sort_order = 0, is_free = false } = req.body || {};
+      const { title, description, content_type, duration = 0, sort_order, is_free = false } = req.body || {};
       const file = req.file;
+      
+      console.log(`🔍 DEBUG (FILE UPLOAD): Received sort_order from request: ${sort_order} (type: ${typeof sort_order})`);
+      
+      // Parse sort_order for file uploads
+      let finalSortOrderUpload = typeof sort_order === 'string' ? parseInt(sort_order, 10) : (typeof sort_order === 'number' ? sort_order : undefined);
+      if (finalSortOrderUpload !== undefined && isNaN(finalSortOrderUpload)) {
+        finalSortOrderUpload = undefined;
+      }
+      
+      // Check if user explicitly provided sort_order  (not just defaulted to undefined)
+      const userProvidedSortOrderUpload = sort_order !== undefined && sort_order !== null && sort_order !== '';
 
       if (isNaN(courseId) || isNaN(sectionId)) {
         res.status(400).json({
@@ -1379,7 +1551,7 @@ export class CourseController {
           description,
           content_type,
           duration: parseInt(duration) || 0,
-          sort_order: parseInt(sort_order) || 0,
+          sort_order: finalSortOrderUpload,
           is_free: is_free === 'true' || is_free === true,
           file_size: file.size,
           mime_type: file.mimetype
@@ -1412,25 +1584,129 @@ export class CourseController {
           });
           return;
         }
+        
+        // Auto-assign sort_order if not provided for file uploads
+        if (finalSortOrderUpload === undefined || finalSortOrderUpload === null) {
+          const maxSortResult = await DatabaseHelpers.executeSelectOne(
+            connection,
+            `SELECT MAX(sort_order) as max_sort FROM course_contents 
+             WHERE section_id = ? AND status = 1`,
+            [sectionId]
+          );
+          console.log(`📊 DEBUG (FILE): MAX(sort_order) query result:`, maxSortResult);
+          const maxValue = maxSortResult?.max_sort;
+          console.log(`📊 DEBUG (FILE): maxValue = ${maxValue}, type = ${typeof maxValue}`);
+          finalSortOrderUpload = (maxValue || 0) + 1;
+          console.log(`🔢 Auto-assigned sort_order: ${finalSortOrderUpload} for new file content in section ${sectionId} (NO SHIFTING - appending at end)`);
+        } else if (userProvidedSortOrderUpload) {
+          // User explicitly provided sort_order - do auto-shift
+          console.log(`✅ User provided sort_order: ${sort_order} (FILE) - performing auto-shift if needed`);
+          // If user provided sort_order, auto-shift any existing content with sort_order >= provided value
+          const existingWithSortOrder = await DatabaseHelpers.executeSelectOne(
+            connection,
+            `SELECT COUNT(*) as count FROM course_contents 
+             WHERE section_id = ? AND sort_order >= ? AND status = 1`,
+            [sectionId, finalSortOrderUpload]
+          );
+          
+          if (existingWithSortOrder && existingWithSortOrder.count > 0) {
+            // Shift all existing content with sort_order >= finalSortOrderUpload up by 1
+            await DatabaseHelpers.executeQuery(
+              connection,
+              `UPDATE course_contents 
+               SET sort_order = sort_order + 1 
+               WHERE section_id = ? AND sort_order >= ? AND status = 1`,
+              [sectionId, finalSortOrderUpload]
+            );
+            console.log(`🔄 Auto-shifted ${existingWithSortOrder.count} file content items in section ${sectionId} to make room for user-provided sort_order: ${finalSortOrderUpload}`);
+          }
+        }
+        
+        // Ensure finalSortOrderUpload is always a valid number (safeguard against database DEFAULT 0)
+        if (finalSortOrderUpload === undefined || finalSortOrderUpload === null || isNaN(finalSortOrderUpload)) {
+          finalSortOrderUpload = 1;
+          console.log(`⚠️ Safeguard: Set sort_order to 1 for new file content in section ${sectionId} (was: ${typeof finalSortOrderUpload === 'number' ? finalSortOrderUpload : 'undefined/null'})`);
+        }
+        
+        // CRITICAL: Verify finalSortOrderUpload is a number before INSERT
+        finalSortOrderUpload = Number(finalSortOrderUpload);
+        if (isNaN(finalSortOrderUpload) || finalSortOrderUpload < 1) {
+          finalSortOrderUpload = 1;
+        }
+        console.log(`📝 INSERTING file content with sort_order: ${finalSortOrderUpload} (confirmed as number)`);
 
         try {
-          // Upload file to S3 with compression
-          console.log(`🚀 Starting file upload with compression for: ${file.originalname}`);
-          const uploadWithCompressionResult = await S3Service.uploadFileWithCompression({
-            buffer: file.buffer,
-            originalName: file.originalname,
-            mimeType: file.mimetype,
-            courseId,
-            sectionId,
-            contentType: content_type,
-            courseName: section.course_name,
-            sectionName: section.title
-          });
+          // Check file size - use streaming upload for large files (>500MB)
+          const fileSize = (file as any).size || 0;
+          const LARGE_FILE_THRESHOLD = 500 * 1024 * 1024; // 500MB
+          const isLargeFile = fileSize > LARGE_FILE_THRESHOLD;
 
-          const uploadResult = uploadWithCompressionResult.uploadResult;
-          const compressionInfo = uploadWithCompressionResult.compressionInfo;
+          console.log(`📊 File size: ${(fileSize / (1024 * 1024 * 1024)).toFixed(2)} GB - Using ${isLargeFile ? 'STREAMING' : 'COMPRESSION'} upload method`);
 
-          // Create content record in database with compressed file information
+          let uploadResult: any;
+          let compressionInfo: any = null;
+
+          if (isLargeFile) {
+            // For large files (>500MB), stream directly to S3 without compression
+            console.log(`🚀 Starting streaming file upload for: ${file.originalname}`);
+            const { cleanupTempFile } = require('../utils/uploadMiddleware');
+            
+            try {
+              uploadResult = await S3Service.uploadFileFromPath(
+                (file as any).path, // Use file.path from disk storage
+                file.originalname,
+                file.mimetype,
+                courseId,
+                sectionId,
+                content_type,
+                section.course_name,
+                section.title
+              );
+              
+              // Clean up temp file after successful upload
+              await cleanupTempFile((file as any).path);
+              console.log(`✅ Large file streaming upload completed successfully`);
+            } catch (streamError) {
+              console.error(`❌ Streaming upload failed:`, streamError);
+              // Clean up temp file on error
+              try {
+                const { cleanupTempFile } = require('../utils/uploadMiddleware');
+                await cleanupTempFile((file as any).path);
+              } catch (cleanupError) {
+                console.error(`⚠️ Failed to cleanup temp file:`, cleanupError);
+              }
+              throw streamError;
+            }
+          } else {
+            // For smaller files, upload with compression
+            console.log(`🚀 Starting file upload with compression for: ${file.originalname}`);
+            
+            // For disk-based multer, read file into buffer for compression
+            const fileBuffer = fs.readFileSync((file as any).path);
+            const uploadWithCompressionResult = await S3Service.uploadFileWithCompression({
+              buffer: fileBuffer,
+              originalName: file.originalname,
+              mimeType: file.mimetype,
+              courseId,
+              sectionId,
+              contentType: content_type,
+              courseName: section.course_name,
+              sectionName: section.title
+            });
+
+            uploadResult = uploadWithCompressionResult.uploadResult;
+            compressionInfo = uploadWithCompressionResult.compressionInfo;
+            
+            // Clean up temp file after compression
+            try {
+              const { cleanupTempFile } = require('../utils/uploadMiddleware');
+              await cleanupTempFile((file as any).path);
+            } catch (cleanupError) {
+              console.error(`⚠️ Failed to cleanup temp file after compression:`, cleanupError);
+            }
+          }
+
+          // Create content record in database with file information
           const detectedContentType = S3Service.getFileTypeCategory(file.mimetype);
           console.log(`📝 Creating content with detectedContentType: ${detectedContentType} (mimeType: ${file.mimetype})`);
           const contentId = await DatabaseHelpers.executeInsert(
@@ -1442,13 +1718,13 @@ export class CourseController {
               title || null,
               description || null,
               detectedContentType,
-              uploadResult.url || null, // S3 URL of compressed file
+              uploadResult.url || null, // S3 URL of file
               null, // file_path
-              compressionInfo.compressedSize || file.size, // Store compressed file size
-              compressionInfo.mimeType || file.mimetype,
+              compressionInfo?.compressedSize || fileSize, // Store file size (or compressed size if available)
+              compressionInfo?.mimeType || file.mimetype,
               FileUploadValidator.sanitizeFileName(file.originalname) || null,
               parseInt(duration) || 0,
-              parseInt(sort_order) || 0,
+              finalSortOrderUpload,
               contentData.is_free || false,
               req.user?.id || null,
               req.user?.id || null
@@ -1465,14 +1741,19 @@ export class CourseController {
           // Generate signed URLs for the uploaded content
           await processContentSignedUrls(createdContent);
 
-          console.log(`✅ Content created successfully with compression:`);
-          console.log(`   Original Size: ${CompressionService.formatBytes(file.size)}`);
-          console.log(`   Compressed Size: ${CompressionService.formatBytes(compressionInfo.compressedSize)}`);
-          console.log(`   Saved: ${compressionInfo.compressionRatio}%`);
+          if (compressionInfo) {
+            console.log(`✅ Content created successfully with compression:`);
+            console.log(`   Original Size: ${CompressionService.formatBytes(fileSize)}`);
+            console.log(`   Compressed Size: ${CompressionService.formatBytes(compressionInfo.compressedSize)}`);
+            console.log(`   Saved: ${compressionInfo.compressionRatio}%`);
+          } else {
+            console.log(`✅ Content uploaded successfully (streaming mode):`);
+            console.log(`   File Size: ${(fileSize / (1024 * 1024 * 1024)).toFixed(2)} GB`);
+          }
 
           res.status(201).json({
             status: 'success',
-            message: 'Content uploaded and compressed successfully',
+            message: isLargeFile ? 'Video uploaded successfully (streaming transmission)' : 'Content uploaded and compressed successfully',
             data: {
               content: {
                 ...createdContent,
@@ -2153,9 +2434,21 @@ export class CourseController {
               normalizedContentType
             );
 
+            // With disk storage, read file from disk instead of using buffer
+            let fileBuffer: Buffer;
+            const filePath = (req.file as any).path;
+            
+            if (filePath) {
+              // Disk storage: read file from path
+              fileBuffer = fs.readFileSync(filePath);
+            } else {
+              // Memory storage (fallback): use buffer directly
+              fileBuffer = req.file.buffer;
+            }
+            
             // Upload new file to S3
             const uploadResult = await S3Service.uploadFile({
-              buffer: req.file.buffer,
+              buffer: fileBuffer,
               originalName: req.file.originalname,
               mimeType: req.file.mimetype,
               courseId,
@@ -2164,6 +2457,16 @@ export class CourseController {
               courseName: section.course_name,
               sectionName: section.title
             });
+            
+            // Clean up temp file after upload (if using disk storage)
+            if (filePath) {
+              try {
+                const { cleanupTempFile } = require('../utils/uploadMiddleware');
+                await cleanupTempFile(filePath);
+              } catch (cleanupError) {
+                console.warn(`⚠️ Failed to cleanup temp file:`, cleanupError);
+              }
+            }
 
             newContentUrl = uploadResult.url;
             newMimeType = req.file.mimetype;
@@ -2177,6 +2480,33 @@ export class CourseController {
               details: uploadError instanceof Error ? uploadError.message : 'Unknown error'
             });
             return;
+          }
+        }
+
+        // Handle sort_order changes - auto-shift existing content if needed
+        if (sort_order !== undefined && sort_order !== existingContent.sort_order) {
+          const oldSortOrder = existingContent.sort_order;
+          
+          if (sort_order > oldSortOrder) {
+            // Moving down (higher sort_order): shift items between old and new position down
+            await DatabaseHelpers.executeQuery(
+              connection,
+              `UPDATE course_contents 
+               SET sort_order = sort_order - 1 
+               WHERE section_id = ? AND sort_order > ? AND sort_order <= ? AND id != ? AND status = 1`,
+              [sectionId, oldSortOrder, sort_order, contentId]
+            );
+            console.log(`🔄 Auto-shifted content items down in section ${sectionId} when moving item from ${oldSortOrder} to ${sort_order}`);
+          } else {
+            // Moving up (lower sort_order): shift items between new and old position up
+            await DatabaseHelpers.executeQuery(
+              connection,
+              `UPDATE course_contents 
+               SET sort_order = sort_order + 1 
+               WHERE section_id = ? AND sort_order >= ? AND sort_order < ? AND id != ? AND status = 1`,
+              [sectionId, sort_order, oldSortOrder, contentId]
+            );
+            console.log(`🔄 Auto-shifted content items up in section ${sectionId} when moving item from ${oldSortOrder} to ${sort_order}`);
           }
         }
 
@@ -2542,23 +2872,82 @@ export class CourseController {
           ? content_type.toUpperCase() 
           : contentTypeEnum;
 
-        // Upload to S3 with compression
-        console.log(`🚀 Starting file upload with compression for: ${req.file!.originalname}`);
+        // Upload to S3 - choose method based on file size
+        console.log(`🚀 Starting file upload for: ${req.file!.originalname}`);
         const sectionIdNum = typeof section_id === 'string' ? parseInt(section_id) : section_id;
         
-        const uploadWithCompressionResult = await S3Service.uploadFileWithCompression({
-          buffer: req.file!.buffer,
-          originalName: req.file!.originalname,
-          mimeType: req.file!.mimetype,
-          courseId: courseId,
-          sectionId: sectionIdNum,
-          contentType: finalContentType,
-          courseName: `Course-${courseId}`,
-          sectionName: `Section-${sectionIdNum}`
-        });
+        // Get file path and size from disk storage
+        const filePath = (req.file as any).path;
+        const fileSize = (req.file as any).size || 0;
+        const LARGE_FILE_THRESHOLD = 500 * 1024 * 1024; // 500MB
+        const isLargeFile = fileSize > LARGE_FILE_THRESHOLD;
 
-        const s3Result = uploadWithCompressionResult.uploadResult;
-        const compressionInfo = uploadWithCompressionResult.compressionInfo;
+        console.log(`📊 File size: ${(fileSize / (1024 * 1024)).toFixed(2)} MB - Using ${isLargeFile ? 'STREAMING' : 'COMPRESSION'} upload method`);
+
+        let s3Result: any;
+        let compressionInfo: any = null;
+
+        if (isLargeFile) {
+          // For large files (>500MB), stream directly to S3 without compression
+          console.log(`🚀 Starting streaming file upload for: ${req.file!.originalname}`);
+          const { cleanupTempFile } = require('../utils/uploadMiddleware');
+          
+          try {
+            s3Result = await S3Service.uploadFileFromPath(
+              filePath,
+              req.file!.originalname,
+              req.file!.mimetype,
+              courseId,
+              sectionIdNum,
+              finalContentType,
+              `Course-${courseId}`,
+              `Section-${sectionIdNum}`
+            );
+            
+            // Clean up temp file after successful upload
+            await cleanupTempFile(filePath);
+            console.log(`✅ Large file streaming upload completed successfully`);
+          } catch (streamError) {
+            console.error(`❌ Streaming upload failed:`, streamError);
+            // Clean up temp file on error
+            try {
+              const { cleanupTempFile: cleanup } = require('../utils/uploadMiddleware');
+              await cleanup(filePath);
+            } catch (cleanupError) {
+              console.error(`⚠️ Failed to cleanup temp file:`, cleanupError);
+            }
+            throw streamError;
+          }
+        } else {
+          // For smaller files, upload with compression
+          console.log(`🚀 Starting file upload with compression for: ${req.file!.originalname}`);
+          
+          // Read file from disk (disk storage doesn't load into memory)
+          const fileBuffer = fs.readFileSync(filePath);
+          const uploadWithCompressionResult = await S3Service.uploadFileWithCompression({
+            buffer: fileBuffer,
+            originalName: req.file!.originalname,
+            mimeType: req.file!.mimetype,
+            courseId: courseId,
+            sectionId: sectionIdNum,
+            contentType: finalContentType,
+            courseName: `Course-${courseId}`,
+            sectionName: `Section-${sectionIdNum}`
+          });
+
+          s3Result = uploadWithCompressionResult.uploadResult;
+          compressionInfo = uploadWithCompressionResult.compressionInfo;
+          
+          // Clean up temp file after compression
+          try {
+            const { cleanupTempFile } = require('../utils/uploadMiddleware');
+            await cleanupTempFile(filePath);
+          } catch (cleanupError) {
+            console.error(`⚠️ Failed to cleanup temp file after compression:`, cleanupError);
+          }
+        }
+
+        const uploadWithCompressionResult = { uploadResult: s3Result, compressionInfo };
 
         // Auto-assign sort_order if not provided: get the highest sort_order in this section + 1
         let autoSortOrder = 0;
@@ -2571,7 +2960,11 @@ export class CourseController {
         autoSortOrder = (maxSortResult?.max_sort || 0) + 1;
         console.log(`🔢 Auto-assigned sort_order: ${autoSortOrder} for uploaded content in section ${sectionIdNum}`);
 
-        // Insert content record with compressed file information
+        // Determine final file size to store in database
+        const finalFileSizeForDb = compressionInfo?.compressedSize || fileSize;
+        const finalMimeTypeForDb = compressionInfo?.mimeType || req.file!.mimetype;
+
+        // Insert content record with file information
         const query = `
           INSERT INTO course_contents (
             course_id, section_id, title, content_type, content_url, description, 
@@ -2587,11 +2980,11 @@ export class CourseController {
             parseInt(section_id),
             title || req.file!.originalname,
             finalContentType,
-            s3Result.url, // S3 URL of compressed file
+            s3Result.url, // S3 URL of file
             description || '',
             req.file!.originalname,
-            compressionInfo.compressedSize, // Store compressed file size
-            compressionInfo.mimeType,
+            finalFileSizeForDb, // File size (or compressed size)
+            finalMimeTypeForDb,
             autoSortOrder,
             req.user?.id,
             req.user?.id
@@ -2605,21 +2998,26 @@ export class CourseController {
           [result.insertId]
         );
 
-        console.log(`✅ Content created successfully with compression:`);
-        console.log(`   Original Size: ${CompressionService.formatBytes(req.file!.size)}`);
-        console.log(`   Compressed Size: ${CompressionService.formatBytes(compressionInfo.compressedSize)}`);
-        console.log(`   Saved: ${compressionInfo.compressionRatio}%`);
+        console.log(`✅ Content created successfully:`);
+        if (compressionInfo) {
+          console.log(`   Original Size: ${CompressionService.formatBytes(fileSize)}`);
+          console.log(`   Compressed Size: ${CompressionService.formatBytes(compressionInfo.compressedSize)}`);
+          console.log(`   Saved: ${compressionInfo.compressionRatio}%`);
+        } else {
+          console.log(`   File Size: ${CompressionService.formatBytes(fileSize)} (streaming upload)`);
+        }
 
         // Generate signed URL for videos and images to ensure they're accessible
         let accessibleUrl: string = s3Result.url;
+        const mimeTypeForSigned = compressionInfo?.mimeType || req.file!.mimetype;
         if (finalContentType === 'VIDEO' || finalContentType === 'IMAGE') {
           try {
             // Generate signed URL with MIME type for proper streaming/display support
-            const signedUrl = await SignedUrlHelper.generateSignedUrl(s3Result.url, 86400, compressionInfo.mimeType);
+            const signedUrl = await SignedUrlHelper.generateSignedUrl(s3Result.url, 86400, mimeTypeForSigned);
             // Use signed URL if generated, otherwise fallback to direct S3 URL
             if (signedUrl) {
               accessibleUrl = signedUrl;
-              console.log(`✅ Generated signed URL for ${finalContentType} (${compressionInfo.mimeType}):`, accessibleUrl.substring(0, 80) + '...');
+              console.log(`✅ Generated signed URL for ${finalContentType} (${mimeTypeForSigned}):`, accessibleUrl.substring(0, 80) + '...');
             } else {
               console.warn(`⚠️ Signed URL generation returned undefined for ${finalContentType}, using direct S3 URL`);
             }
@@ -2631,22 +3029,26 @@ export class CourseController {
 
         res.status(201).json({
           status: 'success',
-          message: 'Course content uploaded and compressed successfully',
+          message: isLargeFile ? 'Video uploaded successfully (streaming transmission)' : 'Course content uploaded and compressed successfully',
           data: {
             id: result.insertId,
             title: title || req.file!.originalname,
             content_type: finalContentType,
             content_url: accessibleUrl,
             file_name: req.file!.originalname,
-            mime_type: compressionInfo.mimeType,
+            mime_type: mimeTypeForSigned,
             sort_order: createdContent?.sort_order || autoSortOrder,
-            upload_details: {
-              original_size: CompressionService.formatBytes(req.file!.size),
+            upload_details: compressionInfo ? {
+              original_size: CompressionService.formatBytes(fileSize),
               compressed_size: CompressionService.formatBytes(compressionInfo.compressedSize),
               compression_ratio: `${compressionInfo.compressionRatio}%`,
               compression_time_ms: compressionInfo.compressionTime,
-              storage_saved: CompressionService.formatBytes(req.file!.size - compressionInfo.compressedSize),
-              file_type: compressionInfo.fileType
+              storage_saved: CompressionService.formatBytes(fileSize - compressionInfo.compressedSize),
+              file_type: compressionInfo.fileType,
+              upload_method: 'compression'
+            } : {
+              file_size: CompressionService.formatBytes(fileSize),
+              upload_method: 'streaming'
             },
             section_id: parseInt(section_id)
           }

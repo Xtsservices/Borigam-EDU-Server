@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { AuthController } from '../controllers/authController';
 import { authenticateToken, loginRateLimit } from '../middlewares/auth';
+import { wrapAsync } from '../utils/asyncHandler';
 
 const router = Router();
 
@@ -10,16 +11,16 @@ const router = Router();
  */
 
 // Public routes - No authentication required
-router.post('/login', loginRateLimit, AuthController.login);
-router.post('/forgot-password', AuthController.forgotPassword);
-router.post('/reset-password', AuthController.resetPassword);
+router.post('/login', loginRateLimit, wrapAsync(AuthController.login));
+router.post('/forgot-password', wrapAsync(AuthController.forgotPassword));
+router.post('/reset-password', wrapAsync(AuthController.resetPassword));
 
 // Protected routes - Authentication required
-router.get('/profile', authenticateToken, AuthController.getProfile);
-router.get('/myprofile', authenticateToken, AuthController.getMyProfile);
-router.put('/profile', authenticateToken, AuthController.updateProfile);
-router.put('/change-password', authenticateToken, AuthController.changePassword);
-router.get('/login-history', authenticateToken, AuthController.getLoginHistory);
-router.post('/logout', authenticateToken, AuthController.logout);
+router.get('/profile', authenticateToken, wrapAsync(AuthController.getProfile));
+router.get('/myprofile', authenticateToken, wrapAsync(AuthController.getMyProfile));
+router.put('/profile', authenticateToken, wrapAsync(AuthController.updateProfile));
+router.put('/change-password', authenticateToken, wrapAsync(AuthController.changePassword));
+router.get('/login-history', authenticateToken, wrapAsync(AuthController.getLoginHistory));
+router.post('/logout', authenticateToken, wrapAsync(AuthController.logout));
 
 export default router;

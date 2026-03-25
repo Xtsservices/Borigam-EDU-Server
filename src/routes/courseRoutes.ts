@@ -2,6 +2,7 @@ import express from 'express';
 import { CourseController } from '../controllers/courseController';
 import { authenticateToken, adminOnly } from '../middlewares/auth';
 import { uploadMiddleware, handleMulterError } from '../utils/uploadMiddleware';
+import { wrapAsync } from '../utils/asyncHandler';
 
 // Define interface for authenticated request
 interface AuthenticatedRequest extends express.Request {
@@ -24,16 +25,16 @@ router.use(authenticateToken);
  */
 
 // Get all courses (Public/Student view shows only published, Admin shows all)
-router.get('/', CourseController.getAllCourses);
+router.get('/', wrapAsync(CourseController.getAllCourses));
 
 // Get all categories
-router.get('/categories', CourseController.getAllCategories);
+router.get('/categories', wrapAsync(CourseController.getAllCategories));
 
 // Admin only - Create new category
-router.post('/categories', adminOnly, CourseController.createCategory);
+router.post('/categories', adminOnly, wrapAsync(CourseController.createCategory));
 
 // Get course by ID with sections and contents
-router.get('/:id', CourseController.getCourseById);
+router.get('/:id', wrapAsync(CourseController.getCourseById));
 
 // Admin only routes - Create, Update, Delete courses
 router.post('/', adminOnly, 
@@ -51,7 +52,7 @@ router.post('/', adminOnly,
       next();
     });
   },
-  CourseController.createCourse
+  wrapAsync(CourseController.createCourse)
 );
 
 router.put('/:id', adminOnly,
@@ -69,33 +70,33 @@ router.put('/:id', adminOnly,
       next();
     });
   },
-  CourseController.updateCourse
+  wrapAsync(CourseController.updateCourse)
 );
 
-router.delete('/:id', adminOnly, CourseController.deleteCourse);
+router.delete('/:id', adminOnly, wrapAsync(CourseController.deleteCourse));
 
 /**
  * Course Section Routes
  */
 
 // Get course sections
-router.get('/:courseId/sections', CourseController.getCourseSections);
+router.get('/:courseId/sections', wrapAsync(CourseController.getCourseSections));
 
 // Create section for a course (Admin only)
-router.post('/:courseId/sections', adminOnly, CourseController.createSection);
+router.post('/:courseId/sections', adminOnly, wrapAsync(CourseController.createSection));
 
 // Update section (Admin only)
-router.put('/:courseId/sections/:sectionId', adminOnly, CourseController.updateSection);
+router.put('/:courseId/sections/:sectionId', adminOnly, wrapAsync(CourseController.updateSection));
 
 // Delete section (Admin only)
-router.delete('/:courseId/sections/:sectionId', adminOnly, CourseController.deleteSection);
+router.delete('/:courseId/sections/:sectionId', adminOnly, wrapAsync(CourseController.deleteSection));
 
 /**
  * Course Content Routes
  */
 
 // Get section contents
-router.get('/:courseId/sections/:sectionId/contents', CourseController.getSectionContents);
+router.get('/:courseId/sections/:sectionId/contents', wrapAsync(CourseController.getSectionContents));
 
 /**
  * File Upload Routes (Admin only) - MUST come before generic POST route
@@ -115,11 +116,11 @@ router.post('/:courseId/sections/:sectionId/contents/upload',
       next();
     });
   },
-  CourseController.uploadContent
+  wrapAsync(CourseController.uploadContent)
 );
 
 // Create content for a section (Admin only)
-router.post('/:courseId/sections/:sectionId/contents', adminOnly, CourseController.createContent);
+router.post('/:courseId/sections/:sectionId/contents', adminOnly, wrapAsync(CourseController.createContent));
 
 // Update content (Admin only) - with file upload support
 router.put('/:courseId/sections/:sectionId/contents/:contentId', 
@@ -136,7 +137,7 @@ router.put('/:courseId/sections/:sectionId/contents/:contentId',
       next();
     });
   },
-  CourseController.updateContent
+  wrapAsync(CourseController.updateContent)
 );
 
 /**
@@ -144,16 +145,16 @@ router.put('/:courseId/sections/:sectionId/contents/:contentId',
  */
 
 // Get content with signed URL for secure access (automatic progress tracking for students)
-router.get('/:courseId/contents/:contentId/access', CourseController.getContentAccess);
+router.get('/:courseId/contents/:contentId/access', wrapAsync(CourseController.getContentAccess));
 
 // Get my progress for a course (Students only)
-router.get('/:courseId/my-progress', CourseController.getMyProgress);
+router.get('/:courseId/my-progress', wrapAsync(CourseController.getMyProgress));
 
 // Get student progress (Admin/Institute Admin only)
-router.get('/:courseId/students/:studentId/progress', CourseController.getStudentProgress);
+router.get('/:courseId/students/:studentId/progress', wrapAsync(CourseController.getStudentProgress));
 
 // Delete content (Admin only)
-router.delete('/:courseId/contents/:contentId', adminOnly, CourseController.deleteContent);
+router.delete('/:courseId/contents/:contentId', adminOnly, wrapAsync(CourseController.deleteContent));
 
 // Upload course content (PDF/DOC files) - Admin only
 router.post('/:courseId/content/upload', adminOnly,
@@ -168,7 +169,7 @@ router.post('/:courseId/content/upload', adminOnly,
       next();
     });
   },
-  CourseController.uploadCourseContent
+  wrapAsync(CourseController.uploadCourseContent)
 );
 
 export default router;
