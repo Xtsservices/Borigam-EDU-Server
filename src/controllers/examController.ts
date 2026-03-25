@@ -584,24 +584,64 @@ export class ExamController {
           return;
         }
 
+        console.log(`📝 updateExam - Received duration_unit: ${duration_unit} (type: ${typeof duration_unit})`);
+        
+        // Determine final values - use provided values or keep existing ones
+        const finalExamTypeId = exam_type_id || exam.exam_type_id;
+        const finalExamName = exam_name || exam.exam_name;
+        const finalDuration = duration !== undefined ? duration : exam.duration;
+        const finalDurationUnit = duration_unit || exam.duration_unit; // Keep existing if not provided
+        const finalDescription = description !== undefined ? description : exam.description;
+
+        console.log(`🔄 updateExam - Final values:`, {
+          finalDurationUnit,
+          previousDurationUnit: exam.duration_unit,
+          isChanging: duration_unit !== undefined && duration_unit !== exam.duration_unit
+        });
+
         // Update exam
         await DatabaseHelpers.executeQuery(
           connection,
           ExamQueries.updateExam,
           [
-            exam_type_id || exam.exam_type_id,
-            exam_name || exam.exam_name,
-            duration !== undefined ? duration : exam.duration,
-            duration_unit || exam.duration_unit,
-            description !== undefined ? description : exam.description,
+            finalExamTypeId,
+            finalExamName,
+            finalDuration,
+            finalDurationUnit,
+            finalDescription,
             req.user!.id,
             parseInt(id as string)
           ]
         );
 
+        // Get the updated exam with all details
+        const updatedExam = await DatabaseHelpers.executeSelectOne(
+          connection,
+          `SELECT 
+            e.id, e.exam_type_id, e.exam_name, e.description, e.duration, 
+            e.duration_unit, e.course_id, e.status, e.created_at, e.updated_at,
+            c.title as course_title,
+            et.name as exam_type_name
+           FROM exams e
+           LEFT JOIN courses c ON e.course_id = c.id
+           LEFT JOIN exam_types et ON e.exam_type_id = et.id
+           WHERE e.id = ?`,
+          [parseInt(id as string)]
+        );
+
+        console.log(`✅ Exam updated successfully:`, {
+          id: updatedExam.id,
+          exam_name: updatedExam.exam_name,
+          duration: updatedExam.duration,
+          duration_unit: updatedExam.duration_unit
+        });
+
         res.status(200).json({
           status: 'success',
-          message: 'Exam updated successfully'
+          message: 'Exam updated successfully',
+          data: {
+            exam: updatedExam
+          }
         });
       });
 
@@ -689,7 +729,8 @@ export class ExamController {
               e.exam_name as name,
               e.description,
               e.created_at as exam_date,
-              e.duration as duration_minutes,
+              e.duration,
+              e.duration_unit,
               e.status,
               c.title as course_name,
               et.name as exam_type
@@ -709,7 +750,8 @@ export class ExamController {
               e.exam_name as name,
               e.description,
               e.created_at as exam_date,
-              e.duration as duration_minutes,
+              e.duration,
+              e.duration_unit,
               e.status,
               c.title as course_name,
               et.name as exam_type
