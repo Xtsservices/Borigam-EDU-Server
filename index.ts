@@ -35,10 +35,10 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
-// Increase limits for large file uploads - Support up to 3GB files
+// Increase limits for large file uploads - Support up to 16GB files
 // Note: Express limits are for request parsing, actual multer limits are configured in uploadMiddleware.ts
-app.use(express.json({ limit: '3gb' }));
-app.use(express.urlencoded({ extended: true, limit: '3gb' }));
+app.use(express.json({ limit: '16gb' }));
+app.use(express.urlencoded({ extended: true, limit: '16gb' }));
 
 // Configure request timeout middleware for large file uploads
 // Set request timeout to 30 minutes (1800000 ms) to avoid 504 Gateway Timeout

@@ -638,7 +638,7 @@ export const examValidation = {
 
 // File upload validation schemas
 export const fileUploadValidation = {
-  // Validate file upload for course content (supports up to 3GB)
+  // Validate file upload for course content (supports up to 16GB)
   uploadCourseContent: Joi.object({
     course_id: Joi.number().integer().positive().required().messages({
       'number.positive': 'Course ID must be a positive integer',
@@ -663,16 +663,16 @@ export const fileUploadValidation = {
     is_free: Joi.boolean().optional().default(false)
   }),
 
-  // Validate file metadata for any file type (up to 3GB)
+  // Validate file metadata for any file type (up to 16GB)
   fileMetadata: Joi.object({
     fileName: Joi.string().min(1).max(255).required().messages({
       'string.min': 'File name is required',
       'string.max': 'File name cannot exceed 255 characters',
       'any.required': 'File name is required'
     }),
-    fileSize: Joi.number().integer().positive().max(3 * 1024 * 1024 * 1024).required().messages({
+    fileSize: Joi.number().integer().positive().max(16 * 1024 * 1024 * 1024).required().messages({
       'number.positive': 'File size must be a positive number',
-      'number.max': 'File size cannot exceed 3GB (3,221,225,472 bytes)',
+      'number.max': 'File size cannot exceed 16GB (17,179,869,184 bytes)',
       'any.required': 'File size is required'
     }),
     mimeType: Joi.string().required().messages({

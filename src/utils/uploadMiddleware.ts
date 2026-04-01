@@ -47,12 +47,12 @@ const fileFilter = (req: AuthenticatedRequest, file: Express.Multer.File, cb: (e
 };
 
 // Multer configuration for disk storage (streaming support)
-// 3GB file size limit (3 * 1024 * 1024 * 1024 = 3221225472 bytes)
-const THREE_GB_BYTES = 3 * 1024 * 1024 * 1024;
+// 16GB file size limit (16 * 1024 * 1024 * 1024 = 17179869184 bytes)
+const SIXTEEN_GB_BYTES = 16 * 1024 * 1024 * 1024;
 const upload = multer({
   storage: storage, // Use disk storage for large file streaming
   limits: {
-    fileSize: THREE_GB_BYTES, // Max 3GB per file
+    fileSize: SIXTEEN_GB_BYTES, // Max 16GB per file
     files: 10, // Max 10 files per request
     fields: 20, // Max 20 non-file fields
     parts: 30 // Max 30 parts total
@@ -77,12 +77,12 @@ export const uploadMiddleware = {
 
 // File validation utilities
 export class FileUploadValidator {
-  // Maximum file size: 3GB
-  private static readonly MAX_FILE_SIZE_MB = 3072; // 3GB in MB
-  private static readonly MAX_FILE_SIZE_BYTES = 3 * 1024 * 1024 * 1024; // 3GB in bytes
+  // Maximum file size: 16GB
+  private static readonly MAX_FILE_SIZE_MB = 16384; // 16GB in MB
+  private static readonly MAX_FILE_SIZE_BYTES = 16 * 1024 * 1024 * 1024; // 16GB in bytes
   
   /**
-   * Validate file size - Default max 3GB
+   * Validate file size - Default max 16GB
    */
   static validateFileSize(file: Express.Multer.File, maxSizeMB: number = FileUploadValidator.MAX_FILE_SIZE_MB): boolean {
     const maxSizeBytes = maxSizeMB * 1024 * 1024;
@@ -223,7 +223,7 @@ export class FileUploadValidator {
     // Validate file size
     if (!FileUploadValidator.validateFileSize(file)) {
       const fileSize = FileUploadValidator.formatFileSize(file.size);
-      errors.push(`❌ File size (${fileSize}) exceeds the maximum limit of 3GB. Please select a smaller file.`);
+      errors.push(`❌ File size (${fileSize}) exceeds the maximum limit of 16GB. Please select a smaller file.`);
     }
 
     // Validate file name
@@ -280,7 +280,7 @@ export const handleMulterError = (error: any) => {
   if (error instanceof multer.MulterError) {
     switch (error.code) {
       case 'LIMIT_FILE_SIZE':
-        return '❌ File size too large. Maximum allowed size is 3GB. Please select a smaller file.';
+        return '❌ File size too large. Maximum allowed size is 16GB. Please select a smaller file.';
       case 'LIMIT_FILE_COUNT':
         return '❌ Too many files submitted. Maximum allowed is 10 files per request.';
       case 'LIMIT_UNEXPECTED_FILE':
